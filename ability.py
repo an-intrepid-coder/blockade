@@ -1,18 +1,12 @@
 from pygame.locals import *
 
-ability_types = [ # NOTE: I may do away with the various distinctions between ranged types, and rely entirely on the
-                  #   range variable in the class. Probably will before implementing missiles.
-    "short range torpedo",
-    "medium range torpedo",
-    "long range torpedo",
-    "short range missile",
-    "long range missile",
-    "short range radar",
-    "long range radar",
+ability_types = [ 
+    "torpedo",
+    "missile", # TODO
+    "radar", # TODO
     "passive sonar",
-    "active sonar",
-    "intel report", # NOTE: Will show a variety of stats/overlays for a target, based on known intel 
-                    #       ^ (maybe a few of these, one for a stat block and one for each overlay) (start w/ stat block)
+    "active sonar", # TODO
+    "intel report", # TODO
 ] 
 
 class Ability:
@@ -21,12 +15,22 @@ class Ability:
         self.targets_self = False
         self.range = None
 
+class ToggleSpeed(Ability):
+    def __init__(self):  
+        self.targets_self = True
+        self.type = "toggle speed"
+        self.key_literal = "7"
+        self.key_constant = K_7
+
+    def draw_str(self):
+        return "{}: toggle speed".format(self.key_literal)
+
 class ShortRangeTorpedo(Ability):
-    def __init__(self):  # NOTE: this is basically a melee attack with limited ammo
+    def __init__(self):  
         super().__init__()
-        self.type = "short range torpedo"
+        self.type = "torpedo"
         self.ammo = 20 # NOTE: tentative
-        self.range = 3 # NOTE: tentative
+        self.range = 6 # NOTE: tentative
         self.targets_other = True
         self.key_literal = "1"
         self.key_constant = K_1

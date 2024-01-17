@@ -1,6 +1,9 @@
 from os import path
 from pygame.locals import *
 
+TORPEDO_SPEED = 20
+TORPEDO_LAUNCH_COST_BASE = 30
+
 VERSION = "0.0.0"
 
 FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Regular.ttf"))

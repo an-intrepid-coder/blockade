@@ -4,5 +4,5 @@
 
 **Version**: pre-0.0.0 (literally the opening salvo)
 
-**Description**: I am making a traditional Roguelike disguised as a Subsim, with the intent that it eventually be cozy to play with a plug-and-play controller. The goal is something in between Cold Waters and Silent Hunter, although set in a non-historical universe (procedurally generated each campaign, and likely with varying levels of technology between them), and which plays in the manner of a traditional Roguelike (a comparison can also be made to games like XCOM, Invisible Inc., and tactical wargames in general). Early, early stages.
+**Description**: I am making a traditional Roguelike disguised as a Subsim, with the intent that it eventually be cozy to play with a plug-and-play controller. The goal is something in between Cold Waters and Silent Hunter, although set in a non-historical universe (procedurally generated each campaign, and likely with varying levels of technology between them), and which plays in the manner of a traditional Roguelike (a comparison can also be made to games like XCOM, Invisible Inc., and tactical wargames in general). Early, early stages. The stats-and-rolling system are a loosely adapted take on the way GURPS handles things, because that's pretty sweet.
 

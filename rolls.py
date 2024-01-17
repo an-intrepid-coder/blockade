@@ -11,13 +11,13 @@ def roll_for_initiative() -> int:
 def roll_torpedo_damage() -> int:
     return sum(roll3d6())
 
+# Similar to the way skill checks work in GURPS.
 def roll_skill_check(entity, skill, mods=[]) -> int:
     return sum(roll3d6()) - (entity.skills[skill] + sum(mods))
 
 # Similar to a regular skill contest in GURPS
 def roll_skill_contest(entity_a, entity_b, skill_a, skill_b, mods_a=[], mods_b=[]) -> dict:
-    # NOTE: duck-typing to avoid circular reference
-    while True:  # TODO: test
+    while True:  
         roll_a = roll_skill_check(entity_a, skill_a, mods_a)
         roll_b = roll_skill_check(entity_b, skill_b, mods_b)
         if roll_a <= 0 and roll_b > 0:

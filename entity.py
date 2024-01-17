@@ -2,12 +2,22 @@ import pygame
 from pygame.locals import *
 from pygame.math import Vector2
 from constants import *
-from ability import ShortRangeTorpedo, PassiveSonar
+from ability import ShortRangeTorpedo, PassiveSonar, ToggleSpeed
 from functional import first
 from enum import Enum
 from alert_level import AlertLevel
 from faction import Faction
 from rolls import roll_for_initiative
+from euclidean import manhattan_distance
+
+speed_modes = ["normal", "fast"]
+
+class LaunchedWeapon:
+    def __init__(self, eta, launcher, target, wep_range):
+        self.eta = eta
+        self.launcher = launcher
+        self.target = target
+        self.range = wep_range
 
 class Entity: 
     def __init__(self, xy_tuple, faction): 
@@ -35,10 +45,19 @@ class Entity:
             "periscope": None,
         }
         self.hp = None
-        self.dead = False  # for removing from an actor/sprite list
+        self.dead = False  
         self.contacts = [] 
-        self.time_unit_deficit = 0 
-        self.initiative = roll_for_initiative()
+        self.next_move_time = 0 
+        self.speed = None
+        self.speed_mode = "normal"
+        self.torpedos_incoming = []
+        self.missiles_incoming = []
+
+    def toggle_speed(self):
+        if self.speed_mode == "normal":
+            self.speed_mode = "fast"
+        elif self.speed_mode == "fast":
+            self.speed_mode = "normal"
 
     def can_detect_incoming_torpedos(self):
         return self.has_skill("visual detection") or \
@@ -82,7 +101,7 @@ class Player(Entity):
         self.name = "player" # NOTE: temp name
         self.can_ocean_move = True
         self.player = True
-        self.abilities = [ShortRangeTorpedo(), PassiveSonar()]
+        self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed()]
         # NOTE: tentative values below
         self.skills["stealth"] = 16
         self.skills["passive sonar"] = 13
@@ -94,6 +113,7 @@ class Player(Entity):
         self.skills["periscope"] = 14
         self.hp = {"current": 7, "max": 7} 
         self.alert_level = AlertLevel.PREPARED
+        self.speed = {"normal": 30, "fast": 20}
 
 class Freighter(Entity):
     # NOTE: This represents a totally unarmed freighter, and not a Q-ship or anything like that. But I will include
@@ -110,6 +130,7 @@ class Freighter(Entity):
         self.skills["visual detection"] = 6
         self.skills["evasive maneuvers"] = 4
         self.hp = {"current": 5, "max": 5} 
+        self.speed = {"normal": 30, "fast": 20}
 
 # TODO: many more unit types
 

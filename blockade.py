@@ -2,7 +2,7 @@ import pygame
 from constants import *
 from rolls import roll3d6, roll_torpedo_damage, roll_skill_check, roll_skill_contest
 from tile_map import TileMap
-from entity import Player, Freighter, AlertLevel
+from entity import Player, Freighter, AlertLevel, LaunchedWeapon
 from euclidean import manhattan_distance, chebyshev_distance
 from functional import first, flatten
 from console import Console
@@ -10,6 +10,7 @@ import modifiers
 from alert_level import AlertLevel
 from faction import Faction
 import sort_keys
+from random import choice, randint, shuffle
 
 class SimStateSnapshot:
     pass # TODO
@@ -35,6 +36,8 @@ class Game:
         self.sim_snapshots = [] 
         self.player = None
         self.generate_encounter_convoy_attack()
+        self.time_units_passed = 0
+        self.player_turn = 0
 
     def snapshot_sim(self): # TODO: implement sim state snapshotting
         pass
@@ -59,9 +62,6 @@ class Game:
         self.entities = freighters + [player]
         self.player = player
         self.camera = player.xy_tuple
-        # NOTE: For this mission example, at least, the player should go first.
-        self.player.initiative = min(list(map(lambda x: x.initiative, self.entities))) - 1
-        self.entities.sort(key=sort_keys.initiative)
 
     def draw_level(self):
         topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, self.camera[1] - self.screen_wh_cells_tuple[1] // 2)
@@ -87,12 +87,19 @@ class Game:
             count_y = 0
 
         # draw entities
+            # TODO: health bars for displayed entities ... maybe ...
         entity_cells = []
         for entity in self.entities:
             if str(entity.xy_tuple) in relative_positions.keys():
                 rect = relative_positions[str(entity.xy_tuple)]
                 entity_cells.append(rect)
                 self.screen.blit(entity.image, rect)
+                # reticule if currently targeted by a player weapon
+                torps = list(map(lambda x: x.launcher.player, entity.torpedos_incoming))
+                missiles = list(map(lambda x: x.launcher.player, entity.missiles_incoming))
+                if any(torps + missiles):
+                    target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
+                    pygame.draw.circle(self.screen, "red", target, int(CELL_SIZE * .66), 2)
 
         def draw_overlay(radius, color): 
             tiles_in_range = list(filter(lambda x: manhattan_distance(x.xy_tuple, self.player.xy_tuple) <= radius, 
@@ -117,6 +124,7 @@ class Game:
         # overlays (TODO: a few more)
         if self.targeting_ability is not None:
             draw_overlay(self.targeting_ability.range, HUD_OPAQUE_RED)
+
         elif self.overlay_sonar: 
             psonar_range = first(lambda x: x.type == "passive sonar", self.player.abilities).range
             draw_overlay(psonar_range, (0, 220, 220, 170))
@@ -158,10 +166,54 @@ class Game:
             count_y += 1
         self.screen.blit(abilities_surface, (0, 0)) 
 
+    def draw_player_stats(self):
+        line_height = HUD_FONT_SIZE + 1
+        stats_lines = [
+            "Turn: {}".format(self.player_turn),
+            "Time: {}".format(self.time_units_passed),
+            "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
+            "Stealth: {}".format(self.get_player_stealth_str()),
+            "Speed: {} ({})".format(self.player.speed_mode, self.player.speed[self.player.speed_mode]),
+        ]
+        stats_size = (int(self.screen.get_width() * .1), len(stats_lines) * line_height)
+        stats_surface = pygame.Surface(stats_size, flags=SRCALPHA)
+        stats_surface.fill(HUD_OPAQUE_BLACK)
+        pygame.draw.rect(stats_surface, "cyan", (0, 0, stats_size[0], stats_size[1]), 1)
+        count_y = 0
+        for line in stats_lines:
+            text = self.hud_font.render(line, True, "white")
+            x = 4
+            y = line_height * count_y
+            stats_surface.blit(text, (x, y))
+            count_y += 1
+        pos = (int(self.screen.get_width() * .9), 0)
+        self.screen.blit(stats_surface, pos)
+
+    def get_player_stealth_str(self): 
+        return "HIDDEN" # TODO
+
+    def draw_target_stats(self):
+        if self.targeting_ability is not None:
+            target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
+            target_stats = [
+                "Target Name: {}".format(target.name),
+                "HP: {}/{}".format(target.hp["current"], target.hp["max"]),
+                "Speed: {} ({})".format(target.speed_mode, target.speed[target.speed_mode]),
+            ]
+            text = self.hud_font.render("  |  ".join(target_stats), True, "white")
+            surf = pygame.Surface((text.get_width() + 1, text.get_height() + 1), flags=SRCALPHA)
+            surf.fill(HUD_OPAQUE_BLACK)
+            pygame.draw.rect(surf, "cyan", (0, 0, surf.get_width(), surf.get_height()), 1)
+            surf.blit(text, (1, 1))
+            pos = (self.screen.get_width() / 2 - surf.get_width() / 2, 4)
+            self.screen.blit(surf, pos)
+
     def draw_hud(self):
         if self.displaying_hud:
             self.draw_console()
             self.draw_abilities()
+            self.draw_player_stats() 
+            self.draw_target_stats() 
 
     def draw(self):
         self.screen.fill("black")
@@ -185,12 +237,39 @@ class Game:
             self.entities = new_entities
             self.display_changed = True
 
-    def run_checks(self):
-        self.dead_entity_check()
+    def run_ai_behavior(self): # NOTE: in progress
+        while True: 
+            can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed, self.entities))
+            if any(map(lambda x: x.player, can_move)):
+                break
+            shuffle(can_move)
+            for entity in can_move:
+                # testing NOTE
+                entity.next_move_time = self.time_units_passed + randint(10, 100)
+                self.console.push("{} exists".format(entity.name))
+                ####
+            self.time_units_passed += 1
+        return
+
+    def torpedo_arrival_check(self): 
+        potential_targets = list(filter(lambda x: len(x.torpedos_incoming) > 0, self.entities))
+        def arriving_now(entity):
+            return any(map(lambda x: x.eta <= self.time_units_passed, entity.torpedos_incoming))
+        targets = list(filter(arriving_now, potential_targets))
+        for entity in targets:
+            arrived = []
+            for torp in entity.torpedos_incoming:
+                if torp.eta <= self.time_units_passed:
+                    self.sim_event_torpedo_arrival(torp)
+                    arrived.append(torp)
+            for torp in arrived:
+                entity.torpedos_incoming.remove(torp)
 
     def update(self):
         self.handle_events()
-        self.run_checks()
+        self.run_ai_behavior() # NOTE: in progress
+        self.torpedo_arrival_check() # NOTE: in progress
+        self.dead_entity_check()
 
     def keyboard_event_changed_display(self) -> bool:
         return not self.input_blocked() and (self.moved() \
@@ -211,7 +290,7 @@ class Game:
         move_key = self.movement_key_pressed()
         if move_key and not self.targeting_ability:
             if self.move_entity(self.player, KEY_TO_DIRECTION[move_key]):
-                self.camera = self.player.xy_tuple
+                self.player_turn += 1
                 return True
         return False
 
@@ -220,47 +299,52 @@ class Game:
         if pygame.key.get_pressed()[K_f] and self.targeting_ability is not None:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
             if "torpedo" in self.targeting_ability.type:
-                self.sim_event_torpedo_attack(self.player, target, self.targeting_ability.range)
+                self.sim_event_torpedo_launch(self.player, target, self.targeting_ability.range)
                 # NOTE: this will appear again in enemy routines, and will take torpedo range in a different way
             # TODO: missiles and more
             self.reset_target_mode()
+            self.player_turn += 1
             return True
         return False
 
-    # NOTE: This is the basic unit of "game action". Breaking these into too many more sub-functions smaller than this
-    #       would calcify everything and require a bunch of functions that take way too many parameters. It is best if
-    #       they are self-contained like this, in one pot of mild spaghetti, as a sequence of events. But I'll continue
-    #       to look out for more ways of doing it. There will be a lot of functions like this, as each "game action"
-    #       will be pretty custom. But there will be a limited number of them. 
-    # TODO: Preface all SimEvent-like "game action" functions like this with some kind of convention. sim_event_<fn>, etc.
-    def sim_event_torpedo_attack(self, launcher, target, torp_range):
+    def sim_event_torpedo_launch(self, launcher, target, torp_range):
         # NOTE: This covers attacks both from and against the player
-        # NOTE: For now, all torps behave the same aside from their range. But eventually some will do more damage
-        #       or be stealthier, at which point this function gets a few extra steps.
-        self.push_to_console_if_player("TORPEDO ATTACK: {} ---> {}".format(launcher.name, target.name), \
-            [launcher, target])
         self.display_changed = True
-        # Initial launch:
         launcher.raise_alert_level(AlertLevel.ENGAGED)
         launched = self.skill_check_launch_torpedo(self.player)
         if launched <= 0:
             # target detection:
             if target.can_detect_incoming_torpedos():
-                target_detects = self.skill_check_detect_incoming_torpedo(launcher, target)
+                target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target)
                 if target_detects <= 0: 
                     # TODO: (eventually a table of additional effects based on margin of success)
                     target.raise_alert_level(AlertLevel.ENGAGED)
             # nearby observer detection:
             for entity in list(filter(lambda x: x not in [target, launcher], self.entities)): 
                 if entity.can_detect_incoming_torpedos():
-                    detected = self.skill_check_detect_nearby_torpedo_launch(launcher, target, entity) 
+                    detected = self.skill_check_detect_nearby_torpedo(launcher, target, entity) 
                     if detected <= 0:
                         # TODO: (eventually a table of additional effects based on margin of success)
                         entity.raise_alert_level(AlertLevel.ALERTED)
-            # evasion and damage:
+            distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
+            eta = self.time_units_passed + TORPEDO_SPEED * distance
+            target.torpedos_incoming.append(LaunchedWeapon(eta, launcher, target, torp_range))
+            self.push_to_console_if_player("TORPEDO LAUNCHED! (will reach target around: {})".format(eta), [launcher])
+            self.targeting_ability.ammo -= 1
+        else:
+            # TODO: a number of positive margin effects, from nothing to a jam to a misfire or worse
+            self.push_to_console_if_player("torpedo fails to launch!", [launcher])
+        # NOTE: a good or bad roll has a significant effect on the time cost
+        time_cost = TORPEDO_LAUNCH_COST_BASE + (launched * 2)
+        launcher.next_move_time = self.time_units_passed + time_cost
+
+    def sim_event_torpedo_arrival(self, torp): 
+            # evasion and damage
+            launcher, target = torp.launcher, torp.target
+            target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
             if target_detects <= 0 and target.is_mobile():
                 self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target])
-                evaded = self.skill_check_evade_incoming_torpedo(launcher, target) # TODO
+                evaded = self.skill_check_evade_incoming_torpedo(launcher, target)
                 if evaded <= 0 and target_detects <= 0:
                     # TODO: (eventually a table of effects based on margin of victory)
                     msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
@@ -276,40 +360,21 @@ class Game:
                             target.hp["current"], target.hp["max"])
                     self.push_to_console_if_player(dmg_msg, [launcher, target])
 
-            self.targeting_ability.ammo -= 1
-            
-        else:
-            # TODO: a number of positive margin effects, from nothing to a jam to a misfire or worse
-            self.push_to_console_if_player("torpedo fails to launch!", [launcher])
+    def skill_check_to_str(self, result):
+        r_str = "failure"
+        if result <= 0:
+            r_str = "success"
+        r_str = r_str + " by {}".format(abs(result))
+        return r_str
 
     def skill_check_launch_torpedo(self, launcher) -> int:
         bonus = modifiers.torpedo_launch_is_routine
         result = roll_skill_check(launcher, "torpedo", mods=[bonus])
-        self.push_to_console_if_player("[{}] Skill Check (launch torpedo): {}".format(launcher.name, result), [launcher])
+        self.push_to_console_if_player("[{}] Skill Check (launch torpedo): {}".format(launcher.name, \
+            self.skill_check_to_str(result)), [launcher])
         return result
 
-    def skill_check_detect_incoming_torpedo(self, launcher, target) -> int:
-        # NOTE: Covers both visual and sonar. Uses the most effective of either roll for the target.
-        detected_visual, detected_sonar = False, False
-        # NOTE: It is ensured before calling this function that at least one of these skills is present
-        if target.has_skill("visual detection"):
-            # NOTE: This should include player and other subs using periscopes, when up, at some point. Which is a 
-            #       separate skill.
-            penalty = modifiers.torpedo_is_relatively_hard_to_spot
-            detected_visual = roll_skill_check(target, "visual detection", mods=[target.alert_level.value, penalty])
-            self.push_to_console_if_player("[{}] Skill Check (visually detect torpedo): {}".format(target.name, \
-                detected_visual), [target])
-        if target.has_skill("passive sonar") and target.has_ability("passive sonar"):
-            bonus = modifiers.noisy_torpedo_bonus_to_passive_sonar_detection
-            detected_sonar = roll_skill_check(target, "passive sonar", mods=[target.alert_level.value, bonus])
-            self.push_to_console_if_player("[{}] Skill Check (detect torpedo via sonar): {}".format(target.name, \
-                detected_sonar), [target])
-        if (detected_visual or detected_sonar): 
-            winner = min([detected_visual, detected_sonar])
-            return winner
-        return FAIL_DEFAULT
-
-    def skill_check_detect_nearby_torpedo_launch(self, launcher, target, observer) -> int:
+    def skill_check_detect_nearby_torpedo(self, launcher, target, observer) -> int:
         # NOTE: Covers both visual and passive sonar. Uses the most effective of either roll for the target.
         witness = manhattan_distance(launcher.xy_tuple, observer.xy_tuple) <= RANGE_VISUAL_DETECTION \
             or manhattan_distance(target.xy_tuple, observer.xy_tuple) <= RANGE_VISUAL_DETECTION
@@ -320,25 +385,15 @@ class Game:
                 detected_visual = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value, \
                     penalty])
                 self.push_to_console_if_player("[{}] Skill Check (visually detect torpedo): {}".format(observer.name, \
-                    detected_visual), [observer])
+                    self.skill_check_to_str(detected_visual)), [observer])
             if observer.has_skill("passive sonar") and observer.has_ability("passive sonar"):
                 bonus = modifiers.noisy_torpedo_bonus_to_passive_sonar_detection
                 detected_sonar = roll_skill_check(observer, "passive sonar", mods=[observer.alert_level.value, bonus])
                 self.push_to_console_if_player("[{}] Skill Check (detect torpedo via sonar): {}".format(observer.name, \
-                    detected_sonar), [observer])
+                    self.skill_check_to_str(detected_sonar)), [observer])
             if detected_visual or detected_sonar: 
                 return min([detected_visual, detected_sonar])
         return FAIL_DEFAULT
-
-    def skill_check_evade_incoming_torpedo(self, launcher, target) -> int:
-        bonus = modifiers.pilot_torpedo_against_engaged_target_is_challenging(target.alert_level)
-        penalty = modifiers.torpedo_evasion_is_challenging
-        contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=[bonus], mods_b=[penalty])
-        result = contest["roll"]
-        if contest["entity"] is launcher:
-            result *= -1
-        self.push_to_console_if_player("[{}] Skill Contest (evade torpedo): {}".format(target.name, result), [target]) 
-        return result
 
     def push_to_console_if_player(self, msg, entities):
         if any(filter(lambda x: x.player, entities)):
@@ -373,8 +428,7 @@ class Game:
                 # can go over land
                 in_range = manhattan_distance(entity.xy_tuple, self.player.xy_tuple) <= ability.range
             elif "torpedo" in ability.type:
-                # can't go over land (TODO: BFS through water, taking range into account w/ the turns)
-                #  ^-- will be same as missiles for first test tho (NOTE)
+                # TODO" contiguous water targeting only
                 in_range = manhattan_distance(entity.xy_tuple, self.player.xy_tuple) <= ability.range
             return in_range and (not entity.player)
         return list(filter(valid_target, self.entities))
@@ -392,20 +446,21 @@ class Game:
             self.targeting_ability = ability
             self.camera = targets[self.targeting_index["current"]].xy_tuple
             self.targeting_index["max"] = len(targets)
-            #self.console.push("{}".format(self.targeting_index))
             return True
 
     def player_uses_ability(self, key_constant): # NOTE: in progress
         ability_type = list(filter(lambda y: y[0] == key_constant,
             map(lambda x: (x.key_constant, x.type), self.player.abilities)
-        ))[0][1] # haha, maybe. awesome. Now we're talkin'. What the heck would I call this, generically? I think it's
-                 # kinda unique.
-        if ability_type == "short range torpedo":
+        ))[0][1] 
+        if ability_type == "torpedo":
             if self.enter_target_mode(ability_type):
                 self.console.push("target mode: 'f' to fire, TAB to cycle, ESC to return")
         elif ability_type == "passive sonar":
             self.overlay_sonar = not self.overlay_sonar
             self.console.push("displaying passive sonar range: {}".format(self.overlay_sonar))
+        elif ability_type == "toggle speed":
+            self.player.toggle_speed()
+            self.console.push("speed mode is now: {}".format(self.player.speed_mode))
         # TODO: the rest of 'em
 
     def ability_key_pressed(self): # Returns key constant or False
@@ -427,8 +482,8 @@ class Game:
                 valid = True
         return valid
 
-    def movement_key_pressed(self): # returns Key constant or False (TODO: type hinting when can be multiple types?)
-        if pygame.key.get_pressed()[K_h]: # TODO: I can do a thing with this (refactor if-else chain*)
+    def movement_key_pressed(self): # returns Key constant or False 
+        if pygame.key.get_pressed()[K_h]: 
             return K_h
         elif pygame.key.get_pressed()[K_j]:
             return K_j
@@ -454,6 +509,9 @@ class Game:
                 entity.xy_tuple[0] + DIRECTIONS[direction][0], 
                 entity.xy_tuple[1] + DIRECTIONS[direction][1]
             )
+            self.camera = self.player.xy_tuple
+            time_unit_cost = entity.speed[entity.speed_mode]
+            entity.next_move_time = self.time_units_passed + time_unit_cost
             return True
         return False
 
