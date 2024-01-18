@@ -1,6 +1,6 @@
 from enum import Enum
 
-class AlertLevel(Enum):
+class AlertLevel(Enum):  
     COMPLACENT = -2 
     RELAXED = - 1
     PREPARED = 0

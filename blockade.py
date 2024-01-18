@@ -8,7 +8,6 @@ from functional import first, flatten
 from console import Console
 import modifiers
 from alert_level import AlertLevel
-from faction import Faction
 import sort_keys
 from random import choice, randint, shuffle
 
@@ -22,6 +21,7 @@ class Game:
         self.display_changed = True
         self.screen = pygame.display.get_surface() 
         self.screen_wh_cells_tuple = (self.screen.get_width() // CELL_SIZE, self.screen.get_height() // CELL_SIZE)
+        self.screen.set_colorkey(ALPHA_KEY)
         self.clock = pygame.time.Clock()
         self.tilemap = []
         self.camera = (0, 0) # TODO: a little more camera hijackery
@@ -31,6 +31,7 @@ class Game:
         self.console_scrolled_up_by = 0 
         self.hud_font = pygame.font.Font(FONT_PATH, HUD_FONT_SIZE)
         self.overlay_sonar = False
+        self.overlay_radar = False
         self.targeting_ability = None 
         self.targeting_index = {"current": 0, "max": 0}
         self.sim_snapshots = [] 
@@ -38,6 +39,7 @@ class Game:
         self.generate_encounter_convoy_attack()
         self.time_units_passed = 0
         self.player_turn = 0
+        self.stealth = "hidden"
 
     def snapshot_sim(self): # TODO: implement sim state snapshotting
         pass
@@ -50,21 +52,22 @@ class Game:
         # NOTE: will use a very different entity spawning scheme after basic systems fleshed out more
         player = Player((10, 10))
         freighters = [
-            Freighter((1, 10), Faction.ENEMY),
-            Freighter((0, 8), Faction.ENEMY),
-            Freighter((1, 5), Faction.ENEMY),
-            Freighter((2, 18), Faction.ENEMY),
-            Freighter((23, 1), Faction.ENEMY),
-            Freighter((18, 9), Faction.ENEMY),
-            Freighter((24, 10), Faction.ENEMY),
-            Freighter((4, 11), Faction.ENEMY),
+            Freighter((1, 10), "enemy"),
+            Freighter((0, 8), "enemy"),
+            Freighter((1, 5), "enemy"),
+            Freighter((2, 18), "enemy"),
+            Freighter((23, 1), "enemy"),
+            Freighter((18, 9), "enemy"),
+            Freighter((24, 10), "enemy"),
+            Freighter((4, 11), "enemy"),
         ]
         self.entities = freighters + [player]
         self.player = player
         self.camera = player.xy_tuple
 
     def draw_level(self):
-        topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, self.camera[1] - self.screen_wh_cells_tuple[1] // 2)
+        topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, \
+            self.camera[1] - self.screen_wh_cells_tuple[1] // 2)
         relative_positions = {}
 
         # draw tilemap
@@ -86,24 +89,10 @@ class Game:
             count_x += 1
             count_y = 0
 
-        # draw entities
-            # TODO: health bars for displayed entities ... maybe ...
-        entity_cells = []
-        for entity in self.entities:
-            if str(entity.xy_tuple) in relative_positions.keys():
-                rect = relative_positions[str(entity.xy_tuple)]
-                entity_cells.append(rect)
-                self.screen.blit(entity.image, rect)
-                # reticule if currently targeted by a player weapon
-                torps = list(map(lambda x: x.launcher.player, entity.torpedos_incoming))
-                missiles = list(map(lambda x: x.launcher.player, entity.missiles_incoming))
-                if any(torps + missiles):
-                    target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
-                    pygame.draw.circle(self.screen, "red", target, int(CELL_SIZE * .66), 2)
-
         def draw_overlay(radius, color): 
-            tiles_in_range = list(filter(lambda x: manhattan_distance(x.xy_tuple, self.player.xy_tuple) <= radius, 
-                                         self.tilemap.all_tiles()))
+            tiles_in_range = list(filter(lambda x: manhattan_distance(x.xy_tuple, self.player.xy_tuple) <= radius \
+                and x.xy_tuple != self.player.xy_tuple and str(x.xy_tuple) in relative_positions.keys(), \
+                self.tilemap.all_tiles()))
             # filter out land tiles and inaccessible tiles if torpedo attack (TODO)
             if self.targeting_ability is not None:
                 if "torpedo" in self.targeting_ability.type:
@@ -111,7 +100,7 @@ class Game:
             # lay down overlay:
             affected_cells = list(map(lambda x: relative_positions[str(x.xy_tuple)], tiles_in_range))
             for cell in affected_cells:
-                if (cell[0], cell[1]) not in map(lambda x: (x[0], x[1]), entity_cells):
+                if (cell[0], cell[1]) != self.player.xy_tuple:      
                     surf = pygame.Surface((cell[2], cell[3]), flags=SRCALPHA)
                     surf.fill(color)
                     self.screen.blit(surf, (cell[0], cell[1]))
@@ -119,15 +108,55 @@ class Game:
             if self.targeting_ability is not None:
                 target_cell = relative_positions[str(self.camera)]
                 target = (target_cell[0] + CELL_SIZE // 2, target_cell[1] + CELL_SIZE // 2)
-                pygame.draw.circle(self.screen, "yellow", target, int(CELL_SIZE * .66), 2)
+                pygame.draw.circle(self.screen, "magenta", target, int(CELL_SIZE * .66), 2)
 
         # overlays (TODO: a few more)
         if self.targeting_ability is not None:
             draw_overlay(self.targeting_ability.range, HUD_OPAQUE_RED)
+        else:
+            # NOTE: These sensor overlays may overlap
+            if self.overlay_sonar: 
+                psonar_range = first(lambda x: x.type == "passive sonar", self.player.abilities).range
+                draw_overlay(psonar_range, (0, 220, 220, 170))
+            if self.overlay_radar:
+                radar_range = first(lambda x: x.type == "radar", self.player.abilities).range
+                draw_overlay(radar_range, (220, 220, 220, 170))
 
-        elif self.overlay_sonar: 
-            psonar_range = first(lambda x: x.type == "passive sonar", self.player.abilities).range
-            draw_overlay(psonar_range, (0, 220, 220, 170))
+        # draw entities:
+        for entity in self.entities:
+            if str(entity.xy_tuple) in relative_positions.keys():
+                rect = relative_positions[str(entity.xy_tuple)]
+                self.screen.blit(entity.image, rect)
+                # a "tail" showing direction came from:
+                target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
+                tail_point = self.get_tail_point(entity, target) 
+                pygame.draw.line(self.screen, "white", target, tail_point, 2) 
+                # reticule if currently targeted by a player weapon:
+                torps = list(map(lambda x: x.launcher.player, entity.torpedos_incoming))
+                missiles = list(map(lambda x: x.launcher.player, entity.missiles_incoming))
+                if any(torps + missiles):
+                    pygame.draw.circle(self.screen, "yellow", target, int(CELL_SIZE * .66), 2)
+
+    def get_tail_point(self, entity, center) -> tuple:
+        if entity.last_direction == "wait":
+            x, y = center
+        elif entity.last_direction == "up":
+            x, y = center[0], center[1] + CELL_SIZE // 2
+        elif entity.last_direction == "down":
+            x, y = center[0], center[1] - CELL_SIZE // 2
+        elif entity.last_direction == "left":
+            x, y = center[0] + CELL_SIZE // 2, center[1]
+        elif entity.last_direction == "right":
+            x, y = center[0] - CELL_SIZE // 2, center[1]
+        elif entity.last_direction == "upright":
+            x, y = center[0] - CELL_SIZE // 2, center[1] + CELL_SIZE // 2
+        elif entity.last_direction == "upleft":
+            x, y = center[0] + CELL_SIZE // 2, center[1] + CELL_SIZE // 2
+        elif entity.last_direction == "downright":
+            x, y = center[0] - CELL_SIZE // 2, center[1] - CELL_SIZE // 2
+        elif entity.last_direction == "downleft":
+            x, y = center[0] + CELL_SIZE // 2, center[1] - CELL_SIZE // 2
+        return (x, y)
 
     def draw_console(self):
         line_height = HUD_FONT_SIZE + 1
@@ -172,8 +201,9 @@ class Game:
             "Turn: {}".format(self.player_turn),
             "Time: {}".format(self.time_units_passed),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
-            "Stealth: {}".format(self.get_player_stealth_str()),
-            "Speed: {} ({})".format(self.player.speed_mode, self.player.speed[self.player.speed_mode]),
+            "Stealth: {}".format(self.stealth.upper()),
+            "Speed: {} ({})".format(self.player.speed_mode, self.player.get_adjusted_speed()),
+            "Momentum: {}".format(self.player.momentum),
         ]
         stats_size = (int(self.screen.get_width() * .1), len(stats_lines) * line_height)
         stats_surface = pygame.Surface(stats_size, flags=SRCALPHA)
@@ -189,16 +219,13 @@ class Game:
         pos = (int(self.screen.get_width() * .9), 0)
         self.screen.blit(stats_surface, pos)
 
-    def get_player_stealth_str(self): 
-        return "HIDDEN" # TODO
-
     def draw_target_stats(self):
         if self.targeting_ability is not None:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
             target_stats = [
                 "Target Name: {}".format(target.name),
                 "HP: {}/{}".format(target.hp["current"], target.hp["max"]),
-                "Speed: {} ({})".format(target.speed_mode, target.speed[target.speed_mode]),
+                "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
             ]
             text = self.hud_font.render("  |  ".join(target_stats), True, "white")
             surf = pygame.Surface((text.get_width() + 1, text.get_height() + 1), flags=SRCALPHA)
@@ -244,12 +271,16 @@ class Game:
                 break
             shuffle(can_move)
             for entity in can_move:
-                # testing NOTE
-                entity.next_move_time = self.time_units_passed + randint(10, 100)
-                self.console.push("{} exists".format(entity.name))
-                ####
+                # NOTE: testing
+                self.entity_ai_random_move(entity) 
+                #### 
             self.time_units_passed += 1
         return
+
+    # Moves an entity in a completely random direction
+    def entity_ai_random_move(self, entity):
+        direction = choice(list(DIRECTIONS.keys())) 
+        self.move_entity(entity, direction)
 
     def torpedo_arrival_check(self): 
         potential_targets = list(filter(lambda x: len(x.torpedos_incoming) > 0, self.entities))
@@ -268,7 +299,7 @@ class Game:
     def update(self):
         self.handle_events()
         self.run_ai_behavior() # NOTE: in progress
-        self.torpedo_arrival_check() # NOTE: in progress
+        self.torpedo_arrival_check() 
         self.dead_entity_check()
 
     def keyboard_event_changed_display(self) -> bool:
@@ -332,11 +363,20 @@ class Game:
             self.push_to_console_if_player("TORPEDO LAUNCHED! (will reach target around: {})".format(eta), [launcher])
             self.targeting_ability.ammo -= 1
         else:
-            # TODO: a number of positive margin effects, from nothing to a jam to a misfire or worse
+            # TODO: a number of fail-margin effects, from nothing to a jam to a misfire or worse
             self.push_to_console_if_player("torpedo fails to launch!", [launcher])
         # NOTE: a good or bad roll has a significant effect on the time cost
         time_cost = TORPEDO_LAUNCH_COST_BASE + (launched * 2)
         launcher.next_move_time = self.time_units_passed + time_cost
+
+    def skill_check_evade_incoming_torpedo(self, launcher, target) -> int:
+        bonus = modifiers.pilot_torpedo_alert_mod(target.alert_level)
+        contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=[bonus], mods_b=[])
+        result = contest["roll"]
+        if contest["entity"] is launcher:
+            result *= -1
+        self.push_to_console_if_player("[{}] Skill Contest (evade torpedo): {}".format(target.name, result), [target])
+        return result
 
     def sim_event_torpedo_arrival(self, torp): 
             # evasion and damage
@@ -458,10 +498,12 @@ class Game:
         elif ability_type == "passive sonar":
             self.overlay_sonar = not self.overlay_sonar
             self.console.push("displaying passive sonar range: {}".format(self.overlay_sonar))
+        elif ability_type == "radar":
+            self.overlay_radar = not self.overlay_radar
+            self.console.push("using radar and displaying range: {}".format(self.overlay_radar))
         elif ability_type == "toggle speed":
             self.player.toggle_speed()
             self.console.push("speed mode is now: {}".format(self.player.speed_mode))
-        # TODO: the rest of 'em
 
     def ability_key_pressed(self): # Returns key constant or False
         ability_keys = list(map(lambda x: x.key_constant, self.player.abilities))
@@ -504,14 +546,30 @@ class Game:
         return False
 
     def move_entity(self, entity, direction) -> bool:
+        if direction == "wait":
+            entity.next_move_time = self.time_units_passed + WAIT_TU_COST
+            entity.momentum = max(entity.momentum - 2, 0)
+            entity.last_direction = direction
+            return True
         if self.entity_can_move(entity, direction):
             entity.xy_tuple = (
                 entity.xy_tuple[0] + DIRECTIONS[direction][0], 
                 entity.xy_tuple[1] + DIRECTIONS[direction][1]
             )
-            self.camera = self.player.xy_tuple
-            time_unit_cost = entity.speed[entity.speed_mode]
+            if entity.player:
+                self.camera = self.player.xy_tuple
+            time_unit_cost = entity.get_adjusted_speed()
+            if direction in ["upright", "upleft", "downright", "downleft"]:
+                time_unit_cost *= 2
             entity.next_move_time = self.time_units_passed + time_unit_cost
+            # NOTE: momentum change will get a little more in-depth later on
+            if entity.last_direction == direction and entity.speed_mode == "fast":
+                entity.momentum = min(entity.momentum + 1 + FAST_MODE_BONUS, MOMENTUM_CAP + FAST_MODE_BONUS)
+            elif entity.last_direction == direction:
+                entity.momentum = min(entity.momentum + 1, MOMENTUM_CAP)
+            else:
+                entity.momentum = max(entity.momentum - 2, 0)
+            entity.last_direction = direction
             return True
         return False
 

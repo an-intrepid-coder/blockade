@@ -3,7 +3,7 @@ from pygame.locals import *
 ability_types = [ 
     "torpedo",
     "missile", # TODO
-    "radar", # TODO
+    "radar", # NOTE: in progress
     "passive sonar",
     "active sonar", # TODO
     "intel report", # TODO
@@ -48,4 +48,15 @@ class PassiveSonar(Ability):
     
     def draw_str(self):
         return "{}: passive sonar".format(self.key_literal)
+
+class Radar(Ability):
+    def __init__(self):
+        super().__init__()
+        self.type = "radar"
+        self.range = 20
+        self.key_literal = "9"
+        self.key_constant = K_9
+    
+    def draw_str(self):
+        return "{}: radar".format(self.key_literal)
 

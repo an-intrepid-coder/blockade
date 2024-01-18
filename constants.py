@@ -1,8 +1,16 @@
 from os import path
 from pygame.locals import *
 
+WAIT_TU_COST = 5 # for now
+
 TORPEDO_SPEED = 20
 TORPEDO_LAUNCH_COST_BASE = 30
+
+# NOTE: this will eventually vary by ship type.
+#       for now, all capped at effectively 30% speed boost
+MOMENTUM_CAP = 6
+MOMENTUM_FACTOR = .05
+FAST_MODE_BONUS = 2
 
 VERSION = "0.0.0"
 
@@ -11,7 +19,7 @@ WINDOW_ICON_PATH = path.abspath(path.join(path.dirname(__file__), "./window_icon
 
 FPS = 60
 
-HUD_FONT_SIZE = 14
+HUD_FONT_SIZE = 15
 
 CONSOLE_LINES = 6
 
@@ -47,4 +55,12 @@ KEY_TO_DIRECTION = {
 
 HUD_OPAQUE_BLACK = (0, 0, 0, 170)
 HUD_OPAQUE_RED = (255, 0, 0, 170)
+ALPHA_KEY = (249, 249, 249)
+
+speed_modes = ["normal", "fast"]
+
+factions = ["allied", "enemy", "neutral"]
+faction_to_color = {"allied": "cyan", "neutral": "green", "enemy": "red"} 
+
+stealth_levels = ["hidden", "caution", "alert"]
 

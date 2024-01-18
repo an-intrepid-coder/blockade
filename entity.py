@@ -2,15 +2,24 @@ import pygame
 from pygame.locals import *
 from pygame.math import Vector2
 from constants import *
-from ability import ShortRangeTorpedo, PassiveSonar, ToggleSpeed
+from ability import ShortRangeTorpedo, PassiveSonar, ToggleSpeed, Radar
 from functional import first
 from enum import Enum
 from alert_level import AlertLevel
-from faction import Faction
 from rolls import roll_for_initiative
 from euclidean import manhattan_distance
 
-speed_modes = ["normal", "fast"]
+class Contact: # TODO: Contact / Detection system
+    def __init__(self, entity, acc):
+        self.entity = entity
+        self.amt = amt
+
+    def change_acc(self, amt):
+        self.amt = self.amt + amt
+        if amt < 0:
+            amt = 0
+        elif amt > 100:
+            amt = 100
 
 class LaunchedWeapon:
     def __init__(self, eta, launcher, target, wep_range):
@@ -52,6 +61,12 @@ class Entity:
         self.speed_mode = "normal"
         self.torpedos_incoming = []
         self.missiles_incoming = []
+        self.momentum = 0
+        self.last_direction = "wait"
+
+    def get_adjusted_speed(self): 
+        momentum_factor = self.momentum * MOMENTUM_FACTOR
+        return max(int(self.speed - (self.speed * momentum_factor)), 0)
 
     def toggle_speed(self):
         if self.speed_mode == "normal":
@@ -94,14 +109,15 @@ class Entity:
 
 class Player(Entity):
     def __init__(self, xy_tuple): 
-        super().__init__(xy_tuple, Faction.FRIENDLY)
+        super().__init__(xy_tuple, "allied")
         self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
-        self.image.fill("navy")
-        pygame.draw.circle(self.image, "green", (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 2)
-        self.name = "player" # NOTE: temp name
+        self.image.set_colorkey(ALPHA_KEY)
+        self.image.fill(ALPHA_KEY)
+        pygame.draw.circle(self.image, faction_to_color[self.faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.name = "SSN Gibby" # NOTE: will allow player to customize (probably will change that before push)
         self.can_ocean_move = True
         self.player = True
-        self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed()]
+        self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed(), Radar()]
         # NOTE: tentative values below
         self.skills["stealth"] = 16
         self.skills["passive sonar"] = 13
@@ -113,7 +129,7 @@ class Player(Entity):
         self.skills["periscope"] = 14
         self.hp = {"current": 7, "max": 7} 
         self.alert_level = AlertLevel.PREPARED
-        self.speed = {"normal": 30, "fast": 20}
+        self.speed = 30
 
 class Freighter(Entity):
     # NOTE: This represents a totally unarmed freighter, and not a Q-ship or anything like that. But I will include
@@ -121,8 +137,9 @@ class Freighter(Entity):
     def __init__(self, xy_tuple, faction):
         super().__init__(xy_tuple, faction)
         self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
-        self.image.fill("navy")
-        pygame.draw.circle(self.image, "red", (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 2)
+        self.image.set_colorkey(ALPHA_KEY)
+        self.image.fill(ALPHA_KEY)
+        pygame.draw.circle(self.image, faction_to_color[faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
         self.name = "freighter" 
         self.can_ocean_move = True
         self.alert_level = AlertLevel.PREPARED
@@ -130,7 +147,7 @@ class Freighter(Entity):
         self.skills["visual detection"] = 6
         self.skills["evasive maneuvers"] = 4
         self.hp = {"current": 5, "max": 5} 
-        self.speed = {"normal": 30, "fast": 20}
+        self.speed = 35
 
 # TODO: many more unit types
 
