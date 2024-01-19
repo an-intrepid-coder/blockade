@@ -2,7 +2,7 @@ import pygame
 from constants import *
 from rolls import roll3d6, roll_torpedo_damage, roll_skill_check, roll_skill_contest
 from tile_map import TileMap
-from entity import Player, Freighter, AlertLevel, LaunchedWeapon
+from entity import Player, Freighter, AlertLevel, LaunchedWeapon, Contact
 from euclidean import manhattan_distance, chebyshev_distance
 from functional import first, flatten
 from console import Console
@@ -40,6 +40,7 @@ class Game:
         self.time_units_passed = 0
         self.player_turn = 0
         self.stealth = "hidden"
+        self.player_turn_ended = False
 
     def snapshot_sim(self): # TODO: implement sim state snapshotting
         pass
@@ -124,7 +125,8 @@ class Game:
 
         # draw entities:
         for entity in self.entities:
-            if str(entity.xy_tuple) in relative_positions.keys():
+            if str(entity.xy_tuple) in relative_positions.keys() \
+                and (entity in list(map(lambda x: x.entity, self.player.contacts))) or entity.player:
                 rect = relative_positions[str(entity.xy_tuple)]
                 self.screen.blit(entity.image, rect)
                 # a "tail" showing direction came from:
@@ -222,10 +224,12 @@ class Game:
     def draw_target_stats(self):
         if self.targeting_ability is not None:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
+            contact = first(lambda x: x.entity is target, self.player.contacts)
             target_stats = [
                 "Target Name: {}".format(target.name),
                 "HP: {}/{}".format(target.hp["current"], target.hp["max"]),
                 "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
+                "Detection: {}%".format(contact.acc),
             ]
             text = self.hud_font.render("  |  ".join(target_stats), True, "white")
             surf = pygame.Surface((text.get_width() + 1, text.get_height() + 1), flags=SRCALPHA)
@@ -296,11 +300,148 @@ class Game:
             for torp in arrived:
                 entity.torpedos_incoming.remove(torp)
 
+    def sensor_checks(self): 
+        # NOTE: player-allied surface vessels not in yet
+        # NOTE: missiles not in yet
+        for entity in self.entities:
+            new_contacts = []
+            if entity.has_skill("visual detection"):
+                new_contacts.extend(self.sim_event_entity_conducts_visual_detection(entity, new_contacts))
+            if entity.has_ability("passive sonar") and entity.has_skill("passive sonar"):
+                new_contacts.extend(self.sim_event_entity_conducts_psonar_detection(entity, new_contacts)) 
+                if len(entity.torpedos_incoming) > 0 and entity.alert_level != AlertLevel.ENGAGED:
+                    self.sim_event_entity_torpedo_detection(entity) 
+            if entity.has_ability("radar") and entity.has_skill("radar"):
+                new_contacts.extend(self.sim_event_entity_conducts_radar_detection(entity, new_contacts))
+            self.sim_event_degrade_old_contacts(entity, new_contacts)
+            self.sim_event_propagate_new_contacts(entity, new_contacts) 
+
+    # Contact accuracy degrades every turn by 3d6% when not actively being sensed
+    def sim_event_degrade_old_contacts(self, entity, new_contacts):
+        for contact in entity.contacts:
+            if contact not in new_contacts:
+                torp_contact = first(lambda x: x.launcher is entity, contact.entity.torpedos_incoming)
+                if torp_contact is None:
+                    # NOTE: When targeted by an owned torpedo, contacts don't degrade
+                    acc_pen = sum(roll3d6())
+                    contact.change_acc(-acc_pen)
+                if contact.acc == 0: 
+                    entity.contacts.remove(contact)
+                    self.push_to_console_if_player("contact with {} lost".format(contact.entity.name), [entity])
+
+    def sim_event_propagate_new_contacts(self, entity, new_contacts): 
+        entity.contacts.extend(new_contacts)
+        if entity.submersible:
+            # NOTE: submersible entities will propagate contacts only when exposed to do so via an antenna, once
+            #       that mechanic is implemented.
+            return
+        sent = self.skill_check_radio_outgoing(entity)
+        if sent <= 0:
+            receivers = list(filter(lambda x: x is not entity \
+                and x.has_skill("radio") \
+                and x.faction == entity.faction, self.entities))
+            for target in receivers:
+                for contact in new_contacts:
+                    received = self.skill_check_radio_incoming(target, sent)
+                    if received <= 0:
+                        # NOTE: I may include some acc degradation based on margin of success later on
+                        known = first(lambda x: x.entity is contact.entity, target.contacts)
+                        if known is not None and known.acc < contact.acc:
+                            known.acc = contact.acc
+                        elif known is None:
+                            target.contacts.append(contact)
+
+    def sim_event_entity_torpedo_detection(self, entity): 
+        for torp in entity.torpedos_incoming:
+            launcher, target = torp.launcher, torp.target
+            result = self.skill_check_detect_nearby_torpedo(launcher, target, target)
+            if result <= 0:
+                entity.raise_alert_level(AlertLevel.ENGAGED)
+                break
+
+    def sim_event_entity_conducts_visual_detection(self, entity, new_contacts_ls) -> list:
+        new = list(new_contacts_ls)
+        potentials = list(filter(lambda x: x.faction != entity.faction \
+            and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= RANGE_VISUAL_DETECTION \
+            and x is not entity \
+            and not x.submersible, self.entities))
+        for target in potentials:
+            detected = self.skill_check_visually_detect_contact(entity)
+            if detected <= 0:
+                # NOTE: for now, successful visual contacts are always 100% acc.
+                acc = 100
+                new_contact = Contact(target, acc)
+                self.push_to_console_if_player("{} visually detected with {}% accuracy!".format(target.name, acc), \
+                    [entity])
+                exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
+                exists_in_new_contacts = first(lambda x: x.entity is target, new)
+                if exists_in_old_contacts is not None:
+                    exists_in_old_contacts.acc = 100
+                elif exists_in_new_contacts is not None:
+                    exists_in_new_contacts.acc = 100
+                else:
+                    new.append(new_contact)
+        return new
+
+    def sim_event_entity_conducts_psonar_detection(self, entity, new_contacts_ls) -> list:
+        new = list(new_contacts_ls)
+        potentials = list(filter(lambda x: x.faction != entity.faction \
+            and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= PASSIVE_SONAR_RANGE \
+            and x is not entity, self.entities))
+        for target in potentials:
+            detected = self.skill_check_detect_psonar_contact(entity, target)
+            if detected <= 0:
+                # NOTE: psonar contacts come with a range of accuracy ratings based on roll's margin of success 
+                acc = min(50 + 10 * abs(detected), 100)
+                new_contact = Contact(target, acc)
+                exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
+                exists_in_new_contacts = first(lambda x: x.entity is target, new)
+                if exists_in_old_contacts is not None and exists_in_old_contacts.acc < acc:
+                    exists_in_old_contacts.acc = acc
+                elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
+                    exists_in_new_contacts.acc = acc
+                elif exists_in_new_contacts is None and exists_in_old_contacts is None:
+                    self.push_to_console_if_player("{} detected via passive sonar".format(target.name, acc), \
+                        [entity])
+                    new.append(new_contact)
+        return new
+
+    def sim_event_entity_conducts_radar_detection(self, entity, new_contacts_ls) -> list:
+        if not self.overlay_radar:
+            return []
+        new = list(new_contacts_ls)
+        potentials = list(filter(lambda x: x.faction != entity.faction \
+            and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= RADAR_RANGE \
+            and x is not entity, self.entities))
+        for target in potentials:
+            detected = self.skill_check_detect_radar_contact(entity, target)
+            if detected <= 0:
+                # NOTE: for now, successful radar contacts are always 100% acc.
+                acc = 100
+                new_contact = Contact(target, acc)
+                exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
+                exists_in_new_contacts = first(lambda x: x.entity is target, new)
+                if exists_in_old_contacts is not None and exists_in_old_contacts.acc < acc:
+                    exists_in_old_contacts.acc = acc
+                elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
+                    exists_in_new_contacts.acc = acc
+                elif exists_in_new_contacts is None and exists_in_old_contacts is None:
+                    self.push_to_console_if_player("{} detected via radar".format(target.name, acc), \
+                        [entity])
+                    new.append(new_contact)
+        return new
+
+    def turn_based_routines(self):
+        if self.player_turn_ended:
+            self.sensor_checks() 
+            self.run_ai_behavior() # NOTE: in progress
+            self.torpedo_arrival_check() 
+            self.dead_entity_check()
+            self.player_turn_ended = False
+
     def update(self):
         self.handle_events()
-        self.run_ai_behavior() # NOTE: in progress
-        self.torpedo_arrival_check() 
-        self.dead_entity_check()
+        self.turn_based_routines()
 
     def keyboard_event_changed_display(self) -> bool:
         return not self.input_blocked() and (self.moved() \
@@ -322,6 +463,7 @@ class Game:
         if move_key and not self.targeting_ability:
             if self.move_entity(self.player, KEY_TO_DIRECTION[move_key]):
                 self.player_turn += 1
+                self.player_turn_ended = True
                 return True
         return False
 
@@ -335,6 +477,7 @@ class Game:
             # TODO: missiles and more
             self.reset_target_mode()
             self.player_turn += 1
+            self.player_turn_ended = True
             return True
         return False
 
@@ -348,14 +491,12 @@ class Game:
             if target.can_detect_incoming_torpedos():
                 target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target)
                 if target_detects <= 0: 
-                    # TODO: (eventually a table of additional effects based on margin of success)
                     target.raise_alert_level(AlertLevel.ENGAGED)
             # nearby observer detection:
             for entity in list(filter(lambda x: x not in [target, launcher], self.entities)): 
                 if entity.can_detect_incoming_torpedos():
                     detected = self.skill_check_detect_nearby_torpedo(launcher, target, entity) 
                     if detected <= 0:
-                        # TODO: (eventually a table of additional effects based on margin of success)
                         entity.raise_alert_level(AlertLevel.ALERTED)
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + TORPEDO_SPEED * distance
@@ -363,15 +504,16 @@ class Game:
             self.push_to_console_if_player("TORPEDO LAUNCHED! (will reach target around: {})".format(eta), [launcher])
             self.targeting_ability.ammo -= 1
         else:
-            # TODO: a number of fail-margin effects, from nothing to a jam to a misfire or worse
             self.push_to_console_if_player("torpedo fails to launch!", [launcher])
-        # NOTE: a good or bad roll has a significant effect on the time cost
+        # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
         time_cost = TORPEDO_LAUNCH_COST_BASE + (launched * 2)
         launcher.next_move_time = self.time_units_passed + time_cost
 
-    def skill_check_evade_incoming_torpedo(self, launcher, target) -> int:
+    def skill_check_evade_incoming_torpedo(self, torp) -> int:
+        launcher, target = torp.launcher, torp.target
         bonus = modifiers.pilot_torpedo_alert_mod(target.alert_level)
-        contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=[bonus], mods_b=[])
+        acc_pen = -((100 - first(lambda x: x.entity is target, launcher.contacts).acc) // 10)
+        contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=[bonus])
         result = contest["roll"]
         if contest["entity"] is launcher:
             result *= -1
@@ -383,10 +525,10 @@ class Game:
             launcher, target = torp.launcher, torp.target
             target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
             if target_detects <= 0 and target.is_mobile():
+                target.raise_alert_level(AlertLevel.ENGAGED)
                 self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target])
-                evaded = self.skill_check_evade_incoming_torpedo(launcher, target)
+                evaded = self.skill_check_evade_incoming_torpedo(torp)
                 if evaded <= 0 and target_detects <= 0:
-                    # TODO: (eventually a table of effects based on margin of victory)
                     msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
                     self.push_to_console_if_player(msg, [launcher, target])
                 else:
@@ -400,39 +542,88 @@ class Game:
                             target.hp["current"], target.hp["max"])
                     self.push_to_console_if_player(dmg_msg, [launcher, target])
 
-    def skill_check_to_str(self, result):
+    def skill_check_to_str(self, result) -> str:
         r_str = "failure"
         if result <= 0:
             r_str = "success"
         r_str = r_str + " by {}".format(abs(result))
         return r_str
 
+    def skill_check_visually_detect_contact(self, observer) -> int:
+        # NOTE: may eventually take target as a parameter for some things
+        result = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value])
+        if result <= 0:
+            # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
+            #       on it alone.
+            #self.push_to_console_if_player("[{}] Skill Check (visual detection): {}".format(observer.name, \
+            #    self.skill_check_to_str(result)), [observer])
+            return result
+        return FAIL_DEFAULT
+
+    def skill_check_radio_outgoing(self, sender) -> int:
+        result = roll_skill_check(sender, "radio")
+        if result <= 0:
+            self.push_to_console_if_player("[{}] Skill Check (radio send): {}".format(sender.name, \
+                result), [sender])
+            return result
+        return FAIL_DEFAULT
+
+    def skill_check_radio_incoming(self, receiver, sent_r) -> int:
+        result = roll_skill_check(receiver, "radio", mods=[receiver.alert_level.value, sent_r])
+        if result <= 0:
+            return result
+        return FAIL_DEFAULT
+
+    def skill_check_detect_psonar_contact(self, observer, target) -> int:
+        mods = modifiers.moving_psonar_mod(observer, target) + observer.alert_level.value
+        contest = roll_skill_contest(observer, target, "passive sonar", "stealth", mods_a=[mods])
+        result, winner = contest["roll"], contest["entity"]
+        # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
+        #       on it alone.
+        #self.push_to_console_if_player("[{}] Skill Contest (passive sonar detection): {}".format(observer.name, \
+        #    result), [observer])
+        if winner is observer and result <= 0:
+            return result
+        return FAIL_DEFAULT
+
+    def skill_check_detect_radar_contact(self, observer, target) -> int:
+        # NOTE: may eventually take target as a parameter for some things
+        result = roll_skill_check(observer, "radar", mods=[observer.alert_level.value])
+        if result <= 0:
+            # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
+            #       on it alone.
+            #self.push_to_console_if_player("[{}] Skill Check (radar detection): {}".format(observer.name, \
+            #    self.skill_check_to_str(result)), [observer])
+            return result
+        return FAIL_DEFAULT
+
     def skill_check_launch_torpedo(self, launcher) -> int:
-        bonus = modifiers.torpedo_launch_is_routine
-        result = roll_skill_check(launcher, "torpedo", mods=[bonus])
+        result = roll_skill_check(launcher, "torpedo")
         self.push_to_console_if_player("[{}] Skill Check (launch torpedo): {}".format(launcher.name, \
             self.skill_check_to_str(result)), [launcher])
         return result
 
     def skill_check_detect_nearby_torpedo(self, launcher, target, observer) -> int:
         # NOTE: Covers both visual and passive sonar. Uses the most effective of either roll for the target.
-        witness = manhattan_distance(launcher.xy_tuple, observer.xy_tuple) <= RANGE_VISUAL_DETECTION \
-            or manhattan_distance(target.xy_tuple, observer.xy_tuple) <= RANGE_VISUAL_DETECTION
-        if witness:
-            detected_visual, detected_sonar = False, False
-            if observer.has_skill("visual detection"):
-                penalty = modifiers.torpedo_is_relatively_hard_to_spot
-                detected_visual = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value, \
-                    penalty])
+        def witness(r) -> bool:
+            return (manhattan_distance(launcher.xy_tuple, observer.xy_tuple) <= r \
+                or manhattan_distance(target.xy_tuple, observer.xy_tuple) <= r)
+        detected_visual, detected_sonar = False, False
+        if observer.has_skill("visual detection") and witness(RANGE_VISUAL_DETECTION):
+            # NOTE: May include a more fine-grained circumstance for visually detecting incoming torps at some point,
+            #       as they are supposed to be closer to modern ones than WW2-style ones.
+            detected_visual = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value])
+            if detected_visual <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (visually detect torpedo): {}".format(observer.name, \
                     self.skill_check_to_str(detected_visual)), [observer])
-            if observer.has_skill("passive sonar") and observer.has_ability("passive sonar"):
-                bonus = modifiers.noisy_torpedo_bonus_to_passive_sonar_detection
-                detected_sonar = roll_skill_check(observer, "passive sonar", mods=[observer.alert_level.value, bonus])
+        if observer.has_skill("passive sonar") and observer.has_ability("passive sonar") and witness(PASSIVE_SONAR_RANGE):
+            bonus = modifiers.noisy_torpedo_bonus_to_passive_sonar_detection
+            detected_sonar = roll_skill_check(observer, "passive sonar", mods=[observer.alert_level.value, bonus])
+            if detected_sonar <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (detect torpedo via sonar): {}".format(observer.name, \
                     self.skill_check_to_str(detected_sonar)), [observer])
-            if detected_visual or detected_sonar: 
-                return min([detected_visual, detected_sonar])
+        if detected_visual or detected_sonar: 
+            return min([detected_visual, detected_sonar])
         return FAIL_DEFAULT
 
     def push_to_console_if_player(self, msg, entities):
@@ -464,6 +655,8 @@ class Game:
         if ability is None:
             return []
         def valid_target(entity):
+            if first(lambda x: x.entity is entity, self.player.contacts) is None:
+                return False
             if "missile" in ability.type:
                 # can go over land
                 in_range = manhattan_distance(entity.xy_tuple, self.player.xy_tuple) <= ability.range
@@ -488,7 +681,7 @@ class Game:
             self.targeting_index["max"] = len(targets)
             return True
 
-    def player_uses_ability(self, key_constant): # NOTE: in progress
+    def player_uses_ability(self, key_constant): 
         ability_type = list(filter(lambda y: y[0] == key_constant,
             map(lambda x: (x.key_constant, x.type), self.player.abilities)
         ))[0][1] 

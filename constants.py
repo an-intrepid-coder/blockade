@@ -3,8 +3,12 @@ from pygame.locals import *
 
 WAIT_TU_COST = 5 # for now
 
+TORPEDO_RANGE = 6
 TORPEDO_SPEED = 20
 TORPEDO_LAUNCH_COST_BASE = 30
+
+PASSIVE_SONAR_RANGE = 12
+RADAR_RANGE = 20
 
 # NOTE: this will eventually vary by ship type.
 #       for now, all capped at effectively 30% speed boost

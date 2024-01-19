@@ -1,9 +1,10 @@
 from pygame.locals import *
+from constants import *
 
 ability_types = [ 
     "torpedo",
     "missile", # TODO
-    "radar", # NOTE: in progress
+    "radar", 
     "passive sonar",
     "active sonar", # TODO
     "intel report", # TODO
@@ -30,7 +31,7 @@ class ShortRangeTorpedo(Ability):
         super().__init__()
         self.type = "torpedo"
         self.ammo = 20 # NOTE: tentative
-        self.range = 6 # NOTE: tentative
+        self.range = TORPEDO_RANGE # NOTE: tentative
         self.targets_other = True
         self.key_literal = "1"
         self.key_constant = K_1
@@ -42,7 +43,7 @@ class PassiveSonar(Ability):
     def __init__(self): 
         super().__init__()
         self.type = "passive sonar"
-        self.range = 12
+        self.range = PASSIVE_SONAR_RANGE
         self.key_literal = "0" 
         self.key_constant = K_0
     
@@ -53,7 +54,7 @@ class Radar(Ability):
     def __init__(self):
         super().__init__()
         self.type = "radar"
-        self.range = 20
+        self.range = RADAR_RANGE
         self.key_literal = "9"
         self.key_constant = K_9
     

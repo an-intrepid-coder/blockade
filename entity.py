@@ -9,17 +9,17 @@ from alert_level import AlertLevel
 from rolls import roll_for_initiative
 from euclidean import manhattan_distance
 
-class Contact: # TODO: Contact / Detection system
+class Contact: 
     def __init__(self, entity, acc):
         self.entity = entity
-        self.amt = amt
+        self.acc = acc
 
     def change_acc(self, amt):
-        self.amt = self.amt + amt
-        if amt < 0:
-            amt = 0
-        elif amt > 100:
-            amt = 100
+        self.acc = self.acc + amt
+        if self.acc < 0:
+            self.acc = 0
+        elif self.acc > 100:
+            self.acc = 100
 
 class LaunchedWeapon:
     def __init__(self, eta, launcher, target, wep_range):
@@ -52,6 +52,7 @@ class Entity:
             #       which is a separate skill.
             "evasive maneuvers": None,
             "periscope": None,
+            "radio": None,
         }
         self.hp = None
         self.dead = False  
@@ -63,6 +64,7 @@ class Entity:
         self.missiles_incoming = []
         self.momentum = 0
         self.last_direction = "wait"
+        self.submersible = False
 
     def get_adjusted_speed(self): 
         momentum_factor = self.momentum * MOMENTUM_FACTOR
@@ -114,7 +116,7 @@ class Player(Entity):
         self.image.set_colorkey(ALPHA_KEY)
         self.image.fill(ALPHA_KEY)
         pygame.draw.circle(self.image, faction_to_color[self.faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
-        self.name = "SSN Gibby" # NOTE: will allow player to customize (probably will change that before push)
+        self.name = "PLAYER" # NOTE: temporary value
         self.can_ocean_move = True
         self.player = True
         self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed(), Radar()]
@@ -127,9 +129,11 @@ class Player(Entity):
         self.skills["active sonar"] = 16
         self.skills["evasive maneuvers"] = 14  
         self.skills["periscope"] = 14
+        self.skills["radio"] = 15
         self.hp = {"current": 7, "max": 7} 
         self.alert_level = AlertLevel.PREPARED
         self.speed = 30
+        self.submersible = True
 
 class Freighter(Entity):
     # NOTE: This represents a totally unarmed freighter, and not a Q-ship or anything like that. But I will include
@@ -144,8 +148,10 @@ class Freighter(Entity):
         self.can_ocean_move = True
         self.alert_level = AlertLevel.PREPARED
         # NOTE: tentative values below
-        self.skills["visual detection"] = 6
+        self.skills["visual detection"] = 10
         self.skills["evasive maneuvers"] = 4
+        self.skills["radio"] = 11
+        self.skills["stealth"] = 5
         self.hp = {"current": 5, "max": 5} 
         self.speed = 35
 
