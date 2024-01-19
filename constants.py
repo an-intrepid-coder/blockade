@@ -3,12 +3,21 @@ from pygame.locals import *
 
 WAIT_TU_COST = 5 # for now
 
+# NOTE: physics not entirely to scale, and a bit game-ified
+
 TORPEDO_RANGE = 6
 TORPEDO_SPEED = 20
 TORPEDO_LAUNCH_COST_BASE = 30
 
 PASSIVE_SONAR_RANGE = 12
 RADAR_RANGE = 20
+
+# NOTE: Missiles can target contacts in another unit's radar umbrella
+MISSILE_RANGE = 30
+MISSILE_SPEED = 6  
+MISSILE_LAUNCH_COST_BASE = 50 # NOTE: tentative 
+
+POINT_DEFENSE_RANGE = 10  # NOTE: tentative
 
 # NOTE: this will eventually vary by ship type.
 #       for now, all capped at effectively 30% speed boost

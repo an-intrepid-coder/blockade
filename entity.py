@@ -2,7 +2,7 @@ import pygame
 from pygame.locals import *
 from pygame.math import Vector2
 from constants import *
-from ability import ShortRangeTorpedo, PassiveSonar, ToggleSpeed, Radar
+from ability import *
 from functional import first
 from enum import Enum
 from alert_level import AlertLevel
@@ -53,6 +53,8 @@ class Entity:
             "evasive maneuvers": None,
             "periscope": None,
             "radio": None,
+            # NOTE: there will be more kinds of point defense, and an Ability or two which use it, down the road.
+            "point defense": None,
         }
         self.hp = None
         self.dead = False  
@@ -80,6 +82,9 @@ class Entity:
         return self.has_skill("visual detection") or \
             (self.has_skill("passive sonar") and self.has_ability("passive sonar"))
 
+    def can_detect_incoming_missiles(self):
+        return self.has_skill("visual detection") or (self.has_skill("radar") and self.has_ability("radar"))
+
     def change_hp(self, change):
         hp = self.hp["current"] + change
         if hp < 0: hp = 0
@@ -89,7 +94,7 @@ class Entity:
             self.dead = True
 
     def has_ability(self, ability_type):
-        return any(filter(lambda x: x.type == ability_type, self.abilities))
+        return first(lambda x: x.type == ability_type, self.abilities) is not None
 
     def get_ability(self, ability_type):
         return first(lambda x: x.type == ability_type, self.abilities)
@@ -119,14 +124,14 @@ class Player(Entity):
         self.name = "PLAYER" # NOTE: temporary value
         self.can_ocean_move = True
         self.player = True
-        self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed(), Radar()]
+        self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed(), Radar(), ShortRangeMissile()]
         # NOTE: tentative values below
         self.skills["stealth"] = 16
         self.skills["passive sonar"] = 13
-        self.skills["torpedo"] = 16
-        self.skills["missile"] = 16
-        self.skills["radar"] = 15
-        self.skills["active sonar"] = 16
+        self.skills["torpedo"] = 15
+        self.skills["missile"] = 15
+        self.skills["radar"] = 14
+        self.skills["active sonar"] = 15
         self.skills["evasive maneuvers"] = 14  
         self.skills["periscope"] = 14
         self.skills["radio"] = 15
@@ -154,6 +159,28 @@ class Freighter(Entity):
         self.skills["stealth"] = 5
         self.hp = {"current": 5, "max": 5} 
         self.speed = 35
+
+class Escort(Entity):
+    def __init__(self, xy_tuple, faction):
+        super().__init__(xy_tuple, faction)
+        self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
+        self.image.set_colorkey(ALPHA_KEY)
+        self.image.fill(ALPHA_KEY)
+        pygame.draw.circle(self.image, faction_to_color[faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.name = "escort" 
+        self.can_ocean_move = True
+        self.alert_level = AlertLevel.PREPARED
+        # NOTE: tentative values below
+        self.skills["visual detection"] = 12
+        self.skills["evasive maneuvers"] = 10
+        self.skills["radio"] = 14
+        self.skills["radar"] = 13
+        self.skills["stealth"] = 8
+        self.skills["point defense"] = 10
+        self.skills["passive sonar"] = 13
+        self.hp = {"current": 10, "max": 10} 
+        self.speed = 35
+        self.abilities = [Radar(), PassiveSonar()]
 
 # TODO: many more unit types
 

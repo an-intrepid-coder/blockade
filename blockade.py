@@ -1,10 +1,10 @@
 import pygame
 from constants import *
-from rolls import roll3d6, roll_torpedo_damage, roll_skill_check, roll_skill_contest
+from rolls import *
 from tile_map import TileMap
-from entity import Player, Freighter, AlertLevel, LaunchedWeapon, Contact
+from entity import *
 from euclidean import manhattan_distance, chebyshev_distance
-from functional import first, flatten
+from functional import *
 from console import Console
 import modifiers
 from alert_level import AlertLevel
@@ -53,14 +53,14 @@ class Game:
         # NOTE: will use a very different entity spawning scheme after basic systems fleshed out more
         player = Player((10, 10))
         freighters = [
-            Freighter((1, 10), "enemy"),
-            Freighter((0, 8), "enemy"),
-            Freighter((1, 5), "enemy"),
-            Freighter((2, 18), "enemy"),
-            Freighter((23, 1), "enemy"),
-            Freighter((18, 9), "enemy"),
-            Freighter((24, 10), "enemy"),
-            Freighter((4, 11), "enemy"),
+            Escort((1, 10), "enemy"),
+            Escort((0, 8), "enemy"),
+            Escort((1, 5), "enemy"),
+            Escort((2, 18), "enemy"),
+            Escort((23, 1), "enemy"),
+            Escort((18, 9), "enemy"),
+            Escort((24, 10), "enemy"),
+            Escort((4, 11), "enemy"),
         ]
         self.entities = freighters + [player]
         self.player = player
@@ -173,7 +173,6 @@ class Game:
             index = last - line - self.console_scrolled_up_by
             if index >= 0 and index < len(self.console.messages):
                 msgs.append(self.console.messages[index])
-
         msgs.reverse() 
         for line in range(len(msgs)):
             line_surface = self.hud_font.render(msgs[line], True, "white")
@@ -300,6 +299,21 @@ class Game:
             for torp in arrived:
                 entity.torpedos_incoming.remove(torp)
 
+    def missile_arrival_check(self): 
+        potential_targets = list(filter(lambda x: len(x.missiles_incoming) > 0, self.entities))
+        def arriving_now(entity):
+            return any(map(lambda x: x.eta <= self.time_units_passed, entity.missiles_incoming))
+        targets = list(filter(arriving_now, potential_targets))
+        for entity in targets:
+            arrived = []
+            for missile in entity.missiles_incoming:
+                if missile.eta <= self.time_units_passed:
+                    self.sim_event_missile_arrival(missile)
+                    arrived.append(missile)
+            for missile in arrived:
+                if missile in entity.missiles_incoming:
+                    entity.missiles_incoming.remove(missile)
+
     def sensor_checks(self): 
         # NOTE: player-allied surface vessels not in yet
         # NOTE: missiles not in yet
@@ -313,6 +327,8 @@ class Game:
                     self.sim_event_entity_torpedo_detection(entity) 
             if entity.has_ability("radar") and entity.has_skill("radar"):
                 new_contacts.extend(self.sim_event_entity_conducts_radar_detection(entity, new_contacts))
+                if len(entity.missiles_incoming) > 0 and entity.alert_level != AlertLevel.ENGAGED:
+                    self.sim_event_entity_missile_detection(entity) 
             self.sim_event_degrade_old_contacts(entity, new_contacts)
             self.sim_event_propagate_new_contacts(entity, new_contacts) 
 
@@ -350,6 +366,14 @@ class Game:
                             known.acc = contact.acc
                         elif known is None:
                             target.contacts.append(contact)
+
+    def sim_event_entity_missile_detection(entity): 
+        for missile in entity.missiles_incoming:
+            launcher, target = missile.launcher, missile.target
+            result = self.skill_check_detect_nearby_missile(launcher, target, target)
+            if result <= 0:
+                entity.raise_alert_level(AlertLevel.ENGAGED)
+                break
 
     def sim_event_entity_torpedo_detection(self, entity): 
         for torp in entity.torpedos_incoming:
@@ -431,11 +455,18 @@ class Game:
                     new.append(new_contact)
         return new
 
+    def alert_check(self):
+        for entity in self.entities:
+            if len(entity.contacts) > 0:
+                entity.raise_alert_level(AlertLevel.ALERTED)
+
     def turn_based_routines(self):
         if self.player_turn_ended:
-            self.sensor_checks() 
+            self.sensor_checks()
+            self.alert_check()
             self.run_ai_behavior() # NOTE: in progress
             self.torpedo_arrival_check() 
+            self.missile_arrival_check() 
             self.dead_entity_check()
             self.player_turn_ended = False
 
@@ -471,15 +502,43 @@ class Game:
         # NOTE: It is ensured that the selected weapon has ammo before it gets to this point
         if pygame.key.get_pressed()[K_f] and self.targeting_ability is not None:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
-            if "torpedo" in self.targeting_ability.type:
+            if self.targeting_ability.type == "torpedo":
                 self.sim_event_torpedo_launch(self.player, target, self.targeting_ability.range)
-                # NOTE: this will appear again in enemy routines, and will take torpedo range in a different way
-            # TODO: missiles and more
+            elif self.targeting_ability.type == "missile":
+                self.sim_event_missile_launch(self.player, target, self.targeting_ability.range) 
             self.reset_target_mode()
             self.player_turn += 1
             self.player_turn_ended = True
             return True
         return False
+
+    def sim_event_missile_launch(self, launcher, target, missile_range): 
+        # NOTE: This covers attacks both from and against the player
+        self.display_changed = True
+        launcher.raise_alert_level(AlertLevel.ENGAGED)
+        launched = self.skill_check_launch_missile(self.player)
+        if launched <= 0:
+            # target detection:
+            if target.can_detect_incoming_missiles():
+                target_detects = self.skill_check_detect_nearby_missile(launcher, target, target)
+                if target_detects <= 0: 
+                    target.raise_alert_level(AlertLevel.ENGAGED)
+            # nearby observer detection:
+            for entity in list(filter(lambda x: x not in [target, launcher], self.entities)): 
+                if entity.can_detect_incoming_missiles():
+                    detected = self.skill_check_detect_nearby_missile(launcher, target, entity) 
+                    if detected <= 0:
+                        entity.raise_alert_level(AlertLevel.ALERTED)
+            distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
+            eta = self.time_units_passed + MISSILE_SPEED * distance
+            target.missiles_incoming.append(LaunchedWeapon(eta, launcher, target, missile_range))
+            self.push_to_console_if_player("MISSILE LAUNCHED! (will reach target around: {})".format(eta), [launcher])
+            self.targeting_ability.ammo -= 1
+        else:
+            self.push_to_console_if_player("missile fails to launch!", [launcher])
+        # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
+        time_cost = max(MISSILE_LAUNCH_COST_BASE + (launched * 2), 0)
+        launcher.next_move_time = self.time_units_passed + time_cost
 
     def sim_event_torpedo_launch(self, launcher, target, torp_range):
         # NOTE: This covers attacks both from and against the player
@@ -506,7 +565,7 @@ class Game:
         else:
             self.push_to_console_if_player("torpedo fails to launch!", [launcher])
         # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
-        time_cost = TORPEDO_LAUNCH_COST_BASE + (launched * 2)
+        time_cost = max(TORPEDO_LAUNCH_COST_BASE + (launched * 2), 0)
         launcher.next_move_time = self.time_units_passed + time_cost
 
     def skill_check_evade_incoming_torpedo(self, torp) -> int:
@@ -520,27 +579,60 @@ class Game:
         self.push_to_console_if_player("[{}] Skill Contest (evade torpedo): {}".format(target.name, result), [target])
         return result
 
+    def sim_event_missile_arrival(self, missile): 
+        # countermeasures and damage
+        launcher, target = missile.launcher, missile.target
+        point_defenders = list(filter(lambda x: x.faction == target.faction \
+            and manhattan_distance(x.xy_tuple, target.xy_tuple) <= POINT_DEFENSE_RANGE \
+            and not x.player \
+            and x.has_skill("point defense") \
+            and x.has_ability("radar") and x.has_skill("radar") \
+            and (self.skill_check_detect_nearby_missile(launcher, target, x) <= 0 \
+                or x.alert_level == AlertLevel.ENGAGED), self.entities))
+        apply(lambda x: x.raise_alert_level(AlertLevel.ENGAGED), point_defenders)
+        target_detects = target in point_defenders
+        bonus = len(point_defenders)
+        if not target_detects:
+            penalty = -6
+        else:
+            penalty = 0
+        missile_intercepted = roll_skill_contest(launcher, target, "missile", "point defense", mods_b=[bonus, penalty])
+        if missile_intercepted["entity"] is target and missile_intercepted["roll"] <= 0:
+            target.missiles_incoming.remove(missile)
+            self.push_to_console_if_player("{}'s missile intercepted!".format(launcher.name), [launcher, target])
+        else:
+            dmg = roll_missile_damage()
+            # TODO: (eventually a table of effects for damage rolls that are very high or low)
+            target.change_hp(-dmg)
+            if target.dead:
+                dmg_msg = "{} takes {} damage from a missile, and is destroyed!".format(target.name, dmg)
+            else:
+                dmg_msg = "{} takes {} damage from a missile! ({} / {})".format(target.name, dmg, \
+                    target.hp["current"], target.hp["max"])
+            self.push_to_console_if_player(dmg_msg, [launcher, target])
+        target.raise_alert_level(AlertLevel.ENGAGED)
+
     def sim_event_torpedo_arrival(self, torp): 
-            # evasion and damage
-            launcher, target = torp.launcher, torp.target
-            target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
-            if target_detects <= 0 and target.is_mobile():
-                target.raise_alert_level(AlertLevel.ENGAGED)
-                self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target])
-                evaded = self.skill_check_evade_incoming_torpedo(torp)
-                if evaded <= 0 and target_detects <= 0:
-                    msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
-                    self.push_to_console_if_player(msg, [launcher, target])
+        # evasion and damage
+        launcher, target = torp.launcher, torp.target
+        target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
+        if target_detects <= 0 and target.is_mobile():
+            target.raise_alert_level(AlertLevel.ENGAGED)
+            self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target])
+            evaded = self.skill_check_evade_incoming_torpedo(torp)
+            if evaded <= 0 and target_detects <= 0:
+                msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
+                self.push_to_console_if_player(msg, [launcher, target])
+            else:
+                dmg = roll_torpedo_damage()
+                # TODO: (eventually a table of effects for damage rolls that are very high or low)
+                target.change_hp(-dmg)
+                if target.dead:
+                    dmg_msg = "{} takes {} damage from a torpedo, and is destroyed!".format(target.name, dmg)
                 else:
-                    dmg = roll_torpedo_damage()
-                    # TODO: (eventually a table of effects for damage rolls that are very high or low)
-                    target.change_hp(-dmg)
-                    if target.dead:
-                        dmg_msg = "{} takes {} damage from a torpedo, and is destroyed!".format(target.name, dmg)
-                    else:
-                        dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
-                            target.hp["current"], target.hp["max"])
-                    self.push_to_console_if_player(dmg_msg, [launcher, target])
+                    dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
+                        target.hp["current"], target.hp["max"])
+                self.push_to_console_if_player(dmg_msg, [launcher, target])
 
     def skill_check_to_str(self, result) -> str:
         r_str = "failure"
@@ -602,6 +694,33 @@ class Game:
         self.push_to_console_if_player("[{}] Skill Check (launch torpedo): {}".format(launcher.name, \
             self.skill_check_to_str(result)), [launcher])
         return result
+
+    def skill_check_launch_missile(self, launcher) -> int:
+        result = roll_skill_check(launcher, "missile")
+        self.push_to_console_if_player("[{}] Skill Check (launch missile): {}".format(launcher.name, \
+            self.skill_check_to_str(result)), [launcher])
+        return result
+
+    def skill_check_detect_nearby_missile(self, launcher, target, observer) -> int: # TODO
+        def witness(r) -> bool:
+            return (manhattan_distance(launcher.xy_tuple, observer.xy_tuple) <= r \
+                or manhattan_distance(target.xy_tuple, observer.xy_tuple) <= r)
+        detected_visual, detected_radar = False, False
+        if observer.has_skill("visual detection") and witness(RANGE_VISUAL_DETECTION):
+            # NOTE: May include a more fine-grained circumstance for visually detecting incoming torps at some point,
+            #       as they are supposed to be closer to modern ones than WW2-style ones.
+            detected_visual = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value])
+            if detected_visual <= 0:
+                self.push_to_console_if_player("[{}] Skill Check (visually detect missile): {}".format(observer.name, \
+                    self.skill_check_to_str(detected_visual)), [observer])
+        if observer.has_skill("radar") and observer.has_ability("radar") and witness(RADAR_RANGE):
+            detected_radar = roll_skill_check(observer, "radar", mods=[observer.alert_level.value])
+            if detected_radar <= 0:
+                self.push_to_console_if_player("[{}] Skill Check (detect torpedo via radar): {}".format(observer.name, \
+                    self.skill_check_to_str(detected_radar)), [observer])
+        if detected_visual or detected_radar: 
+            return min([detected_visual, detected_radar])
+        return FAIL_DEFAULT
 
     def skill_check_detect_nearby_torpedo(self, launcher, target, observer) -> int:
         # NOTE: Covers both visual and passive sonar. Uses the most effective of either roll for the target.
@@ -685,7 +804,7 @@ class Game:
         ability_type = list(filter(lambda y: y[0] == key_constant,
             map(lambda x: (x.key_constant, x.type), self.player.abilities)
         ))[0][1] 
-        if ability_type == "torpedo":
+        if ability_type == "torpedo" or ability_type == "missile":
             if self.enter_target_mode(ability_type):
                 self.console.push("target mode: 'f' to fire, TAB to cycle, ESC to return")
         elif ability_type == "passive sonar":

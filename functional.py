@@ -5,6 +5,7 @@ def first(fn, ls):
         return result[0]
     return None
 
+# Apply a function to every element of a list
 def apply(fn, ls):
     for element in ls:
         fn(element)

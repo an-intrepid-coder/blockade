@@ -3,7 +3,7 @@ from constants import *
 
 ability_types = [ 
     "torpedo",
-    "missile", # TODO
+    "missile", 
     "radar", 
     "passive sonar",
     "active sonar", # TODO
@@ -38,6 +38,19 @@ class ShortRangeTorpedo(Ability):
     
     def draw_str(self):
         return "{}: torpedo (x{})".format(self.key_literal, self.ammo)
+
+class ShortRangeMissile(Ability):
+    def __init__(self):
+        super().__init__()
+        self.type = "missile"
+        self.ammo = 8 # NOTE: tentative
+        self.range = MISSILE_RANGE
+        self.targets_other = True
+        self.key_literal = "2"
+        self.key_constant = K_2
+
+    def draw_str(self):
+        return "{}: missile (x{})".format(self.key_literal, self.ammo)
 
 class PassiveSonar(Ability):
     def __init__(self): 

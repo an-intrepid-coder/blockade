@@ -8,7 +8,11 @@ def roll3d6() -> list:
 def roll_for_initiative() -> int:
     return sum(roll3d6())
 
+# NOTE: May differentiate damage types more down the road
 def roll_torpedo_damage() -> int:
+    return sum(roll3d6())
+
+def roll_missile_damage() -> int:
     return sum(roll3d6())
 
 # Similar to the way skill checks work in GURPS.
