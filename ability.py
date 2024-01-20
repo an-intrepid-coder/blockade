@@ -63,6 +63,17 @@ class PassiveSonar(Ability):
     def draw_str(self):
         return "{}: passive sonar".format(self.key_literal)
 
+class ActiveSonar(Ability):
+    def __init__(self):
+        super().__init__()
+        self.type = "active sonar"
+        self.range = ACTIVE_SONAR_RANGE
+        self.key_literal = "8"
+        self.key_constant = K_8
+
+    def draw_str(self):
+        return "{}: active sonar".format(self.key_literal)
+
 class Radar(Ability):
     def __init__(self):
         super().__init__()

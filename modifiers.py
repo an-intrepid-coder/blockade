@@ -1,9 +1,13 @@
 from alert_level import AlertLevel
+from euclidean import manhattan_distance
 
 # situational roll modifiers
 
 # applies to situations where passive sonar is detecting a torpedo
 noisy_torpedo_bonus_to_passive_sonar_detection = 2
+
+# "stealth" skill is much less useful against active sonar
+stealth_asonar_penalty = -3
 
 # returns 0 if piloting against an ENGAGED opponent.
 # otherwise, a huge bonus.
@@ -24,4 +28,8 @@ def moving_psonar_mod(observer, target) -> int:
     elif target.speed_mode == "fast":
         mod += 2
     return mod
+
+def sonar_distance_mod(observer, target) -> int:
+    # NOTE: This may be a non-linear function down the road
+    return -manhattan_distance(observer.xy_tuple, target.xy_tuple)
 

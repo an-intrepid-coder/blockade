@@ -10,6 +10,10 @@ TORPEDO_SPEED = 20
 TORPEDO_LAUNCH_COST_BASE = 30
 
 PASSIVE_SONAR_RANGE = 12
+
+ACTIVE_SONAR_RANGE = 8
+ACTIVE_SONAR_TIME_COST = 5
+
 RADAR_RANGE = 20
 
 # NOTE: Missiles can target contacts in another unit's radar umbrella

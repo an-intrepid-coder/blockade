@@ -5,9 +5,10 @@ from constants import *
 from ability import *
 from functional import first
 from enum import Enum
-from alert_level import AlertLevel
+from alert_level import AlertLevel, random_starting_alert_level
 from rolls import roll_for_initiative
 from euclidean import manhattan_distance
+import sort_keys
 
 class Contact: 
     def __init__(self, entity, acc):
@@ -37,7 +38,7 @@ class Entity:
         self.can_ocean_move = False
         self.can_air_move = False
         self.player = False
-        self.alert_level = None 
+        self.alert_level = random_starting_alert_level()
         self.abilities = [] 
         self.skills = {
             # NOTE: A single skill can be used for multiple abilities
@@ -114,7 +115,7 @@ class Entity:
         #   damaged engines/screws once those are in as some kind of modifier or status effect.
         return self.can_land_move or self.can_ocean_move or self.can_air_move
 
-class Player(Entity):
+class PlayerSub(Entity):
     def __init__(self, xy_tuple): 
         super().__init__(xy_tuple, "allied")
         self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
@@ -124,20 +125,55 @@ class Player(Entity):
         self.name = "PLAYER" # NOTE: temporary value
         self.can_ocean_move = True
         self.player = True
-        self.abilities = [ShortRangeTorpedo(), PassiveSonar(), ToggleSpeed(), Radar(), ShortRangeMissile()]
+        self.abilities = [
+            ShortRangeTorpedo(), 
+            PassiveSonar(), 
+            ActiveSonar(),
+            ToggleSpeed(), 
+            Radar(), 
+            ShortRangeMissile()
+        ]
         # NOTE: tentative values below
         self.skills["stealth"] = 16
         self.skills["passive sonar"] = 13
         self.skills["torpedo"] = 15
         self.skills["missile"] = 15
         self.skills["radar"] = 14
-        self.skills["active sonar"] = 15
+        self.skills["active sonar"] = 17
         self.skills["evasive maneuvers"] = 14  
         self.skills["periscope"] = 14
         self.skills["radio"] = 15
-        self.hp = {"current": 7, "max": 7} 
+        self.hp = {"current": 14, "max": 14} 
         self.alert_level = AlertLevel.PREPARED
         self.speed = 30
+        self.submersible = True
+        self.abilities.sort(key=sort_keys.abilities)
+
+class CoastalDefenseSub(Entity):
+    # NOTE: This represents a relatively small, weak, and stealthy submarine the player might encounter near coastlines.
+    def __init__(self, xy_tuple, faction):
+        super().__init__(xy_tuple, faction)
+        self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
+        self.image.set_colorkey(ALPHA_KEY)
+        self.image.fill(ALPHA_KEY)
+        pygame.draw.circle(self.image, faction_to_color[self.faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.name = "coastal submarine"
+        self.can_ocean_move = True
+        self.abilities = [
+            ShortRangeTorpedo(), 
+            PassiveSonar(), 
+            ToggleSpeed()
+        ]
+        # NOTE: tentative values below
+        self.skills["stealth"] = 14
+        self.skills["passive sonar"] = 11
+        self.skills["torpedo"] = 12
+        self.skills["active sonar"] = 12
+        self.skills["evasive maneuvers"] = 12
+        self.skills["periscope"] = 12
+        self.skills["radio"] = 12
+        self.hp = {"current": 7, "max": 7} 
+        self.speed = 38
         self.submersible = True
 
 class Freighter(Entity):
@@ -151,7 +187,6 @@ class Freighter(Entity):
         pygame.draw.circle(self.image, faction_to_color[faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
         self.name = "freighter" 
         self.can_ocean_move = True
-        self.alert_level = AlertLevel.PREPARED
         # NOTE: tentative values below
         self.skills["visual detection"] = 10
         self.skills["evasive maneuvers"] = 4
@@ -159,6 +194,9 @@ class Freighter(Entity):
         self.skills["stealth"] = 5
         self.hp = {"current": 5, "max": 5} 
         self.speed = 35
+        self.abilities = [
+            ToggleSpeed()
+        ]
 
 class Escort(Entity):
     def __init__(self, xy_tuple, faction):
@@ -169,7 +207,6 @@ class Escort(Entity):
         pygame.draw.circle(self.image, faction_to_color[faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
         self.name = "escort" 
         self.can_ocean_move = True
-        self.alert_level = AlertLevel.PREPARED
         # NOTE: tentative values below
         self.skills["visual detection"] = 12
         self.skills["evasive maneuvers"] = 10
@@ -180,7 +217,11 @@ class Escort(Entity):
         self.skills["passive sonar"] = 13
         self.hp = {"current": 10, "max": 10} 
         self.speed = 35
-        self.abilities = [Radar(), PassiveSonar()]
+        self.abilities = [
+            Radar(), 
+            PassiveSonar(), 
+            ToggleSpeed()
+        ] # TODO: weapons
 
 # TODO: many more unit types
 

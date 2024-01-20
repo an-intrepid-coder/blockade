@@ -51,16 +51,16 @@ class Game:
     def generate_encounter_convoy_attack(self):
         self.tilemap = TileMap(self.screen_wh_cells_tuple, "open ocean")
         # NOTE: will use a very different entity spawning scheme after basic systems fleshed out more
-        player = Player((10, 10))
+        player = PlayerSub((10, 10))
         freighters = [
-            Escort((1, 10), "enemy"),
-            Escort((0, 8), "enemy"),
-            Escort((1, 5), "enemy"),
-            Escort((2, 18), "enemy"),
-            Escort((23, 1), "enemy"),
-            Escort((18, 9), "enemy"),
-            Escort((24, 10), "enemy"),
-            Escort((4, 11), "enemy"),
+            CoastalDefenseSub((11, 10), "enemy"),
+            CoastalDefenseSub((10, 11), "enemy"),
+            CoastalDefenseSub((9, 10), "enemy"),
+            CoastalDefenseSub((2, 18), "enemy"),
+            CoastalDefenseSub((23, 1), "enemy"),
+            CoastalDefenseSub((18, 9), "enemy"),
+            CoastalDefenseSub((24, 10), "enemy"),
+            CoastalDefenseSub((4, 11), "enemy"),
         ]
         self.entities = freighters + [player]
         self.player = player
@@ -407,6 +407,34 @@ class Game:
                     new.append(new_contact)
         return new
 
+    def sim_event_entity_conducts_asonar_detection(self, entity):
+        # NOTE: unlike psonar, this is conducted independently of passive sensor_checks() as an action
+        new = []
+        potentials = list(filter(lambda x: x.faction != entity.faction \
+            and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= ACTIVE_SONAR_RANGE \
+            and x is not entity, self.entities))
+        for target in potentials:
+            detected = self.skill_check_detect_asonar_contact(entity, target) 
+            if detected <= 0:
+                # NOTE: asonar contacts come with a range of accuracy ratings based on roll's margin of success 
+                acc = min(80 + 10 * abs(detected), 100)
+                new_contact = Contact(target, acc)
+                exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
+                exists_in_new_contacts = first(lambda x: x.entity is target, new)
+                if exists_in_old_contacts is not None and exists_in_old_contacts.acc < acc:
+                    exists_in_old_contacts.acc = acc
+                elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
+                    exists_in_new_contacts.acc = acc
+                elif exists_in_new_contacts is None and exists_in_old_contacts is None:
+                    self.push_to_console_if_player("{} detected via active sonar".format(target.name), [entity])
+                    new.append(new_contact)
+        self.sim_event_propagate_new_contacts(entity, new)
+        entity.next_move_time += ACTIVE_SONAR_TIME_COST
+        alerted = list(filter(lambda x: x.has_skill("passive sonar") and x.has_ability("passive sonar"), potentials))
+        for observer in alerted:
+            self.console.push("<testing observer detection")
+            self.sim_event_propagate_new_contacts(entity, [Contact(entity, 100)])
+
     def sim_event_entity_conducts_psonar_detection(self, entity, new_contacts_ls) -> list:
         new = list(new_contacts_ls)
         potentials = list(filter(lambda x: x.faction != entity.faction \
@@ -425,8 +453,7 @@ class Game:
                 elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
                     exists_in_new_contacts.acc = acc
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via passive sonar".format(target.name, acc), \
-                        [entity])
+                    self.push_to_console_if_player("{} detected via passive sonar".format(target.name), [entity])
                     new.append(new_contact)
         return new
 
@@ -436,6 +463,7 @@ class Game:
         new = list(new_contacts_ls)
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= RADAR_RANGE \
+            and not x.submersible \
             and x is not entity, self.entities))
         for target in potentials:
             detected = self.skill_check_detect_radar_contact(entity, target)
@@ -482,14 +510,14 @@ class Game:
             or self.fire_at_target() \
             or self.used_ability())
 
-    def used_ability(self):
+    def used_ability(self) -> bool:
         ability_key = self.ability_key_pressed()
         if ability_key:
             self.player_uses_ability(ability_key)    
             return True
         return False
 
-    def moved(self):
+    def moved(self) -> bool:
         move_key = self.movement_key_pressed()
         if move_key and not self.targeting_ability:
             if self.move_entity(self.player, KEY_TO_DIRECTION[move_key]):
@@ -502,9 +530,13 @@ class Game:
         # NOTE: It is ensured that the selected weapon has ammo before it gets to this point
         if pygame.key.get_pressed()[K_f] and self.targeting_ability is not None:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
+            if target.submersible and self.targeting_ability.type == "missile":
+                self.console.push("can't target submerged vessels with missiles!")
+                self.reset_target_mode()
+                return True
             if self.targeting_ability.type == "torpedo":
                 self.sim_event_torpedo_launch(self.player, target, self.targeting_ability.range)
-            elif self.targeting_ability.type == "missile":
+            elif self.targeting_ability.type == "missile" and not target.submersible:
                 self.sim_event_missile_launch(self.player, target, self.targeting_ability.range) 
             self.reset_target_mode()
             self.player_turn += 1
@@ -582,6 +614,7 @@ class Game:
     def sim_event_missile_arrival(self, missile): 
         # countermeasures and damage
         launcher, target = missile.launcher, missile.target
+        roller, intercepted  = None, False
         point_defenders = list(filter(lambda x: x.faction == target.faction \
             and manhattan_distance(x.xy_tuple, target.xy_tuple) <= POINT_DEFENSE_RANGE \
             and not x.player \
@@ -596,11 +629,18 @@ class Game:
             penalty = -6
         else:
             penalty = 0
-        missile_intercepted = roll_skill_contest(launcher, target, "missile", "point defense", mods_b=[bonus, penalty])
-        if missile_intercepted["entity"] is target and missile_intercepted["roll"] <= 0:
-            target.missiles_incoming.remove(missile)
-            self.push_to_console_if_player("{}'s missile intercepted!".format(launcher.name), [launcher, target])
-        else:
+        if target.has_skill("point defense"):
+            roller = target
+        elif len(point_defenders) > 0:
+            roller = choice(point_defenders)
+        if roller is not None:
+            missile_intercepted = roll_skill_contest(launcher, roller, "missile", "point defense", \
+                mods_b=[bonus, penalty])
+            if missile_intercepted["entity"] is target and missile_intercepted["roll"] <= 0:
+                target.missiles_incoming.remove(missile)
+                self.push_to_console_if_player("{}'s missile intercepted!".format(launcher.name), [launcher, target])
+                intercepted = True
+        if not intercepted:
             dmg = roll_missile_damage()
             # TODO: (eventually a table of effects for damage rolls that are very high or low)
             target.change_hp(-dmg)
@@ -666,9 +706,29 @@ class Game:
             return result
         return FAIL_DEFAULT
 
+    def skill_check_detect_asonar_contact(self, observer, target) -> int:
+        mods = [
+            modifiers.sonar_distance_mod(observer, target) // 2,
+            observer.alert_level.value,
+        ]
+        contest = roll_skill_contest(observer, target, "active sonar", "stealth", mods_a=mods, \
+            mods_b = [modifiers.stealth_asonar_penalty])
+        result, winner = contest["roll"], contest["entity"]
+        # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
+        #       on it alone.
+        #self.push_to_console_if_player("[{}] Skill Contest (active sonar detection): {}".format(observer.name, \
+        #    result), [observer])
+        if winner is observer and result <= 0:
+            return result
+        return FAIL_DEFAULT
+
     def skill_check_detect_psonar_contact(self, observer, target) -> int:
-        mods = modifiers.moving_psonar_mod(observer, target) + observer.alert_level.value
-        contest = roll_skill_contest(observer, target, "passive sonar", "stealth", mods_a=[mods])
+        mods = [
+            modifiers.moving_psonar_mod(observer, target),
+            observer.alert_level.value,
+            modifiers.sonar_distance_mod(observer, target),
+        ]
+        contest = roll_skill_contest(observer, target, "passive sonar", "stealth", mods_a=mods)
         result, winner = contest["roll"], contest["entity"]
         # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
         #       on it alone.
@@ -759,6 +819,7 @@ class Game:
         return False
 
     def reset_target_mode(self):
+        self.display_changed = True
         self.targeting_ability = None
         self.camera = self.player.xy_tuple
         self.targeting_index = {"current": 0, "max": 0}
@@ -816,6 +877,11 @@ class Game:
         elif ability_type == "toggle speed":
             self.player.toggle_speed()
             self.console.push("speed mode is now: {}".format(self.player.speed_mode))
+        elif ability_type == "active sonar":
+            self.console.push("<testing active sonar>")
+            self.sim_event_entity_conducts_asonar_detection(self.player)
+            self.player_turn += 1
+            self.player_turn_ended = True
 
     def ability_key_pressed(self): # Returns key constant or False
         ability_keys = list(map(lambda x: x.key_constant, self.player.abilities))
@@ -858,16 +924,21 @@ class Game:
         return False
 
     def move_entity(self, entity, direction) -> bool:
+        target_xy_tuple = (
+            entity.xy_tuple[0] + DIRECTIONS[direction][0], 
+            entity.xy_tuple[1] + DIRECTIONS[direction][1]
+        )
+        occupied = first(lambda x: x.xy_tuple == target_xy_tuple and entity is not x, self.entities)
+        if occupied is not None and occupied not in list(map(lambda x: x.entity, entity.contacts)):
+            self.push_to_console_if_player("sonar reports suspicious noises in this direction {}".format(occupied.name), [entity])  # testing
+            direction = "wait"
         if direction == "wait":
             entity.next_move_time = self.time_units_passed + WAIT_TU_COST
             entity.momentum = max(entity.momentum - 2, 0)
             entity.last_direction = direction
             return True
         if self.entity_can_move(entity, direction):
-            entity.xy_tuple = (
-                entity.xy_tuple[0] + DIRECTIONS[direction][0], 
-                entity.xy_tuple[1] + DIRECTIONS[direction][1]
-            )
+            entity.xy_tuple = target_xy_tuple
             if entity.player:
                 self.camera = self.player.xy_tuple
             time_unit_cost = entity.get_adjusted_speed()
