@@ -70,6 +70,25 @@ class Entity:
         self.submersible = False
         self.direction = direction
         self.formation = formation
+        self.saved_path = None
+
+    def submersible_emitter(self) -> bool:
+        if not self.has_ability("radar") or not self.submersible:
+            return False
+        return self.submersible and self.get_ability("radar").emerged_to_transmit
+
+    def get_closest_contact(self):
+        closest = None
+        minimum = None
+        for contact in self.contacts:
+            d = manhattan_distance(self.xy_tuple, contact.entity.xy_tuple)
+            if closest is None:
+                closest = contact
+                minimum = d
+            elif d < minimum:
+                closest = contact
+                minimum = d
+        return closest
 
     def get_adjusted_speed(self): 
         momentum_factor = self.momentum * MOMENTUM_FACTOR
@@ -226,9 +245,9 @@ class SmallConvoyEscort(Entity):
         self.can_ocean_move = True
         # NOTE: tentative values below
         self.skills["visual detection"] = 12
-        self.skills["evasive maneuvers"] = 10
+        self.skills["evasive maneuvers"] = 11
         self.skills["radio"] = 14
-        self.skills["radar"] = 13
+        self.skills["radar"] = 14
         self.skills["stealth"] = 8
         self.skills["point defense"] = 10
         self.skills["passive sonar"] = 13

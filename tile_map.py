@@ -1,4 +1,6 @@
 from functional import flatten
+from euclidean import chebyshev_distance
+from constants import *
 
 """ ________Is/Does/Needs/Will Do:
     - Map Generation for: (bearing in mind each tile should represent, like, a square mile or two -- for now, loosely)
@@ -12,7 +14,7 @@ from functional import flatten
         * Cities, Rivers, Forests, Jagged Coastlines, Land Units, Islands all possible.
 """     
 
-tile_types = ["ocean", "land"] # TODO: more types of land, rivers, forests, etc.
+tile_types = ["ocean", "land"] # TODO: more types of land, ocean, rivers, forests, etc.
 
 class Tile:
     def __init__(self, xy_tuple, tile_type):
@@ -75,6 +77,14 @@ class TileMap:
     def tile_in_bounds(self, xy_tuple) -> bool:
         return xy_tuple[0] >= 0 and xy_tuple[1] >= 0 and xy_tuple[0] < self.wh_tuple[0] and xy_tuple[1] < self.wh_tuple[1]
     
-    def all_tiles(self):
+    def all_tiles(self) -> list:
         return flatten(self.tiles)
 
+    def neighbors_of(self, tile_xy) -> list:
+        neighbors = []
+        for _, v in DIRECTIONS.items():
+            target_xy = (tile_xy[0] + v[0], tile_xy[1] + v[1])
+            if self.tile_in_bounds(target_xy):
+                neighbors.append(self.get_tile(target_xy))
+        return neighbors
+            

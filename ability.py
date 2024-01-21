@@ -81,6 +81,7 @@ class Radar(Ability):
         self.range = RADAR_RANGE
         self.key_literal = "9"
         self.key_constant = K_9
+        self.emerged_to_transmit = False
     
     def draw_str(self):
         return "{}: radar".format(self.key_literal)

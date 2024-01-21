@@ -1,5 +1,11 @@
 from random import shuffle, randint, choice
 
+def coin_flip() -> bool:
+    return choice([True, False])
+
+def by_chance(chance_of_thing) -> bool:
+    return randint(1, 100) <= chance_of_thing
+
 def roll3d6() -> list:
     rolls = [randint(1, 6) for x in range(3)]
     rolls.sort()

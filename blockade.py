@@ -42,37 +42,70 @@ class Game:
         self.stealth = "hidden"
         self.player_turn_ended = False
 
+    # Gets the shortest available route 
+    def shortest_entity_path(self, start_loc, end_loc, valid_tile_types) -> list:  
+        def get_traceback(seen) -> list:  
+            current = seen[-1]  
+            traceback = [current["loc"]]
+            seen.reverse()
+            while current["loc"] is not start_loc:
+                for node in seen:
+                    if node["loc"] is current["via"]:
+                        if node["loc"] is not start_loc:
+                            traceback.append(node["loc"])
+                        current = node
+            traceback.reverse()
+            return traceback 
+
+        seen = [{"loc": start_loc, "via": None}]
+        while True:  
+            hits = False
+            for node in seen:
+                distance = manhattan_distance(node["loc"], end_loc)
+                neighbors = self.tilemap.neighbors_of(node["loc"]) 
+                for loc in neighbors:
+                    not_seen = loc.xy_tuple not in list(map(lambda x: x["loc"], seen))
+                    valid_terrain = self.tilemap.get_tile(loc.xy_tuple).tile_type in valid_tile_types
+                    closer = manhattan_distance(loc.xy_tuple, end_loc) < distance
+                    not_occupied = first(lambda x: x.xy_tuple == loc.xy_tuple, self.entities) is None 
+                    goal_reached = loc.xy_tuple == end_loc
+                    new_node = {"loc": loc.xy_tuple, "via": node["loc"]}
+                    if not_seen and valid_terrain and closer and not_occupied:
+                        seen.append(new_node)
+                        hits = True
+                    if goal_reached:
+                        seen.append(new_node)
+                        return get_traceback(seen)
+            if not hits:
+                break
+        return None
+
     def snapshot_sim(self): # TODO: implement sim state snapshotting
         pass
 
     def input_blocked(self):
         return False # NOTE: this will be used later
 
-    def generate_encounter_small_escorted_convoy_attack(self):
+    def generate_encounter_small_escorted_convoy_attack(self): # NOTE: In Progress
         self.tilemap = TileMap((200, 200), "open ocean")
+        num_escorts, num_freighters = randint(2, 4), randint(3, 8)
+        fuzz_val = num_escorts + num_freighters
         traveling = choice(list(DIRECTIONS.keys()))
         origin = (self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2)
-        def fuzzed_spawn(origin, spawn_ls, entity):
+        def fuzzed_spawn(origin, spawn_ls, entity, fuzz):
             while True:
-                x = randint(-10, 10)
-                y = randint(-10, 10)
+                x = randint(-fuzz, fuzz)
+                y = randint(-fuzz, fuzz)
                 spawn = (origin[0] + x, origin[1] + y)
                 if first(lambda x: x.xy_tuple == spawn, spawn_ls) is None:
                     entity.xy_tuple = spawn
                     spawn_ls.append(entity)
                     break
-        escorts = []
-        fuzzed_spawn(origin, escorts, SmallConvoyEscort(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, escorts, SmallConvoyEscort(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, escorts, SmallConvoyEscort(origin, "enemy", direction=traveling))
-        freighters = []
-        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
-        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
-        ai_units = escorts + freighters
+        ai_units = []
+        for _ in range(num_escorts):
+            fuzzed_spawn(origin, ai_units, SmallConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
+        for _ in range(num_freighters):
+            fuzzed_spawn(origin, ai_units, Freighter(origin, "enemy", direction=traveling), fuzz_val)
         player_offset = 20
         player = PlayerSub(origin)
         if "up" in traveling:
@@ -147,7 +180,7 @@ class Game:
         # draw entities:
         for entity in self.entities:
             if str(entity.xy_tuple) in relative_positions.keys() \
-                and (entity in list(map(lambda x: x.entity, self.player.contacts))) or entity.player:
+                and ((entity in list(map(lambda x: x.entity, self.player.contacts))) or entity.player):
                 rect = relative_positions[str(entity.xy_tuple)]
                 self.screen.blit(entity.image, rect)
                 # a "tail" showing direction came from:
@@ -287,6 +320,9 @@ class Game:
         if len(new_entities) < len(self.entities):
             self.entities = new_entities
             self.display_changed = True
+        if self.player not in self.entities:
+            # NOTE: place-holder
+            self.running = False 
 
     def run_ai_behavior(self): # NOTE: in progress
         while True: 
@@ -307,14 +343,29 @@ class Game:
         direction = choice(list(DIRECTIONS.keys())) 
         self.move_entity(entity, direction)
 
-    def entity_ai_small_convoy_escort(self, entity): 
+    def relative_direction(self, from_xy, to_xy): # TODO: put direction-related stuff in own file
+        diff = (to_xy[0] - from_xy[0], to_xy[1] - from_xy[1])
+        for k, v in DIRECTIONS.items():
+            if v == diff:
+                return k
+        return "wait"
+
+    def entity_ai_small_convoy_escort(self, entity):  # NOTE: In Progress
         torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
             entity.contacts)
         if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
-            self.console.push("<testing entity_ai_convoy_escort TORPEDO LAUNCH>")
             self.sim_event_torpedo_launch(entity, torpedo_target.entity, TORPEDO_RANGE)
+        elif len(entity.contacts) > 0:
+            closest = entity.get_closest_contact() 
+            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple, ["ocean"]) 
+            if path is not None:
+                self.console.push("<testing entity_ai_convoy_escort CHASE>")
+                direction = self.relative_direction(entity.xy_tuple, path[0]) 
+                self.move_entity(entity, direction) 
         else:
             self.move_entity(entity, entity.direction)
+        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
+            entity.toggle_speed()
 
     def torpedo_arrival_check(self): 
         potential_targets = list(filter(lambda x: len(x.torpedos_incoming) > 0, self.entities))
@@ -494,7 +545,8 @@ class Game:
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= RADAR_RANGE \
             and not x.submersible \
-            and x is not entity, self.entities))
+            and x is not entity, self.entities)) + \
+            list(filter(lambda x: x.submersible_emitter(), self.entities))
         for target in potentials:
             detected = self.skill_check_detect_radar_contact(entity, target)
             if detected <= 0:
@@ -792,7 +844,7 @@ class Game:
             self.skill_check_to_str(result)), [launcher])
         return result
 
-    def skill_check_detect_nearby_missile(self, launcher, target, observer) -> int: # TODO
+    def skill_check_detect_nearby_missile(self, launcher, target, observer) -> int:
         def witness(r) -> bool:
             return (manhattan_distance(launcher.xy_tuple, observer.xy_tuple) <= r \
                 or manhattan_distance(target.xy_tuple, observer.xy_tuple) <= r)
@@ -846,6 +898,7 @@ class Game:
             targets = self.targets(self.player, self.targeting_ability.type)
             self.targeting_index["current"] = (self.targeting_index["current"] + 1) % self.targeting_index["max"]
             self.camera = targets[self.targeting_index["current"]].xy_tuple
+            self.display_changed = True
             return True
         return False
 
@@ -890,6 +943,7 @@ class Game:
             self.targeting_ability = ability
             self.camera = targets[self.targeting_index["current"]].xy_tuple
             self.targeting_index["max"] = len(targets)
+            self.display_changed = True
             return True
 
     def player_uses_ability(self, key_constant): 
@@ -904,12 +958,14 @@ class Game:
             self.console.push("displaying passive sonar range: {}".format(self.overlay_sonar))
         elif ability_type == "radar":
             self.overlay_radar = not self.overlay_radar
+            radar = self.player.get_ability("radar")
+            radar.emerged_to_transmit = not radar.emerged_to_transmit
             self.console.push("using radar and displaying range: {}".format(self.overlay_radar))
         elif ability_type == "toggle speed":
             self.player.toggle_speed()
             self.console.push("speed mode is now: {}".format(self.player.speed_mode))
         elif ability_type == "active sonar":
-            self.console.push("<testing active sonar>")
+            self.console.push("using active sonar!")
             self.sim_event_entity_conducts_asonar_detection(self.player)
             self.player_turn += 1
             self.player_turn_ended = True
@@ -965,8 +1021,7 @@ class Game:
                 self.entities.remove(entity)
         occupied = first(lambda x: x.xy_tuple == target_xy_tuple and entity is not x, self.entities)
         if occupied is not None and occupied not in list(map(lambda x: x.entity, entity.contacts)):
-            self.push_to_console_if_player("sonar reports suspicious noises in this direction {}".format(occupied.name), \
-                [entity])  
+            self.push_to_console_if_player("suspicious noises in this direction {}".format(occupied.name), [entity])  
             direction = "wait"
         if direction == "wait":
             entity.next_move_time = self.time_units_passed + WAIT_TU_COST
