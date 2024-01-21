@@ -115,13 +115,37 @@ class Entity:
         #   damaged engines/screws once those are in as some kind of modifier or status effect.
         return self.can_land_move or self.can_ocean_move or self.can_air_move
 
+def unit_tile_circle(color):
+    image = pygame.Surface((CELL_SIZE, CELL_SIZE))
+    image.set_colorkey(ALPHA_KEY)
+    image.fill(ALPHA_KEY)
+    pygame.draw.circle(image, color, (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+    return image
+
+def unit_tile_triangle(color, upsidedown=False):
+    image = pygame.Surface((CELL_SIZE, CELL_SIZE))
+    image.set_colorkey(ALPHA_KEY)
+    image.fill(ALPHA_KEY)
+    if upsidedown:
+        vert = (CELL_SIZE // 2, CELL_SIZE - 1)
+        left = (0, 0)
+        right = (CELL_SIZE - 1, 0)
+    else:
+        vert = (CELL_SIZE // 2, 0)
+        left = (0, CELL_SIZE - 1)
+        right = (CELL_SIZE - 1, CELL_SIZE - 1)
+    pygame.draw.polygon(image, color, (vert, left, right))
+    image = pygame.transform.scale(image, (int(image.get_width() * .66), int(image.get_height() * .66)))
+    base = pygame.Surface((CELL_SIZE, CELL_SIZE))
+    base.set_colorkey(ALPHA_KEY)
+    base.fill(ALPHA_KEY)
+    base.blit(image, (int(image.get_width() * .33), int(image.get_height() * .33)))
+    return base
+
 class PlayerSub(Entity):
     def __init__(self, xy_tuple): 
         super().__init__(xy_tuple, "allied")
-        self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
-        self.image.set_colorkey(ALPHA_KEY)
-        self.image.fill(ALPHA_KEY)
-        pygame.draw.circle(self.image, faction_to_color[self.faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
         self.name = "PLAYER" # NOTE: temporary value
         self.can_ocean_move = True
         self.player = True
@@ -153,10 +177,7 @@ class CoastalDefenseSub(Entity):
     # NOTE: This represents a relatively small, weak, and stealthy submarine the player might encounter near coastlines.
     def __init__(self, xy_tuple, faction):
         super().__init__(xy_tuple, faction)
-        self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
-        self.image.set_colorkey(ALPHA_KEY)
-        self.image.fill(ALPHA_KEY)
-        pygame.draw.circle(self.image, faction_to_color[self.faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
         self.name = "coastal submarine"
         self.can_ocean_move = True
         self.abilities = [
@@ -181,10 +202,7 @@ class Freighter(Entity):
     #       such things later.
     def __init__(self, xy_tuple, faction):
         super().__init__(xy_tuple, faction)
-        self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
-        self.image.set_colorkey(ALPHA_KEY)
-        self.image.fill(ALPHA_KEY)
-        pygame.draw.circle(self.image, faction_to_color[faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.image = unit_tile_circle(faction_to_color[self.faction])
         self.name = "freighter" 
         self.can_ocean_move = True
         # NOTE: tentative values below
@@ -201,10 +219,7 @@ class Freighter(Entity):
 class Escort(Entity):
     def __init__(self, xy_tuple, faction):
         super().__init__(xy_tuple, faction)
-        self.image = pygame.Surface((CELL_SIZE, CELL_SIZE))
-        self.image.set_colorkey(ALPHA_KEY)
-        self.image.fill(ALPHA_KEY)
-        pygame.draw.circle(self.image, faction_to_color[faction], (CELL_SIZE // 2, CELL_SIZE // 2), CELL_SIZE // 3)
+        self.image = unit_tile_triangle(faction_to_color[self.faction])
         self.name = "escort" 
         self.can_ocean_move = True
         # NOTE: tentative values below

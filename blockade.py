@@ -54,13 +54,13 @@ class Game:
         player = PlayerSub((10, 10))
         freighters = [
             CoastalDefenseSub((11, 10), "enemy"),
-            CoastalDefenseSub((10, 11), "enemy"),
+            Escort((10, 11), "enemy"),
             CoastalDefenseSub((9, 10), "enemy"),
-            CoastalDefenseSub((2, 18), "enemy"),
-            CoastalDefenseSub((23, 1), "enemy"),
-            CoastalDefenseSub((18, 9), "enemy"),
-            CoastalDefenseSub((24, 10), "enemy"),
-            CoastalDefenseSub((4, 11), "enemy"),
+            Escort((2, 18), "enemy"),
+            Freighter((23, 1), "enemy"),
+            Freighter((18, 9), "neutral"),
+            Freighter((24, 10), "enemy"),
+            Freighter((4, 11), "enemy"),
         ]
         self.entities = freighters + [player]
         self.player = player
