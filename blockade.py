@@ -23,7 +23,7 @@ class Game:
         self.screen_wh_cells_tuple = (self.screen.get_width() // CELL_SIZE, self.screen.get_height() // CELL_SIZE)
         self.screen.set_colorkey(ALPHA_KEY)
         self.clock = pygame.time.Clock()
-        self.tilemap = []
+        self.tilemap = None
         self.camera = (0, 0) # TODO: a little more camera hijackery
         self.entities = []
         self.console = Console()
@@ -36,7 +36,7 @@ class Game:
         self.targeting_index = {"current": 0, "max": 0}
         self.sim_snapshots = [] 
         self.player = None
-        self.generate_encounter_convoy_attack()
+        self.generate_encounter_small_escorted_convoy_attack()
         self.time_units_passed = 0
         self.player_turn = 0
         self.stealth = "hidden"
@@ -48,23 +48,44 @@ class Game:
     def input_blocked(self):
         return False # NOTE: this will be used later
 
-    def generate_encounter_convoy_attack(self):
-        self.tilemap = TileMap(self.screen_wh_cells_tuple, "open ocean")
-        # NOTE: will use a very different entity spawning scheme after basic systems fleshed out more
-        player = PlayerSub((10, 10))
-        freighters = [
-            CoastalDefenseSub((11, 10), "enemy"),
-            Escort((10, 11), "enemy"),
-            CoastalDefenseSub((9, 10), "enemy"),
-            Escort((2, 18), "enemy"),
-            Freighter((23, 1), "enemy"),
-            Freighter((18, 9), "neutral"),
-            Freighter((24, 10), "enemy"),
-            Freighter((4, 11), "enemy"),
-        ]
-        self.entities = freighters + [player]
+    def generate_encounter_small_escorted_convoy_attack(self):
+        self.tilemap = TileMap((200, 200), "open ocean")
+        traveling = choice(list(DIRECTIONS.keys()))
+        origin = (self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2)
+        def fuzzed_spawn(origin, spawn_ls, entity):
+            while True:
+                x = randint(-10, 10)
+                y = randint(-10, 10)
+                spawn = (origin[0] + x, origin[1] + y)
+                if first(lambda x: x.xy_tuple == spawn, spawn_ls) is None:
+                    entity.xy_tuple = spawn
+                    spawn_ls.append(entity)
+                    break
+        escorts = []
+        fuzzed_spawn(origin, escorts, SmallConvoyEscort(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, escorts, SmallConvoyEscort(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, escorts, SmallConvoyEscort(origin, "enemy", direction=traveling))
+        freighters = []
+        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
+        fuzzed_spawn(origin, freighters, Freighter(origin, "enemy", direction=traveling))
+        ai_units = escorts + freighters
+        player_offset = 20
+        player = PlayerSub(origin)
+        if "up" in traveling:
+            player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] - player_offset)
+        if "down" in traveling:
+            player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] + player_offset)
+        if "left" in traveling:
+            player.xy_tuple = (player.xy_tuple[0] - player_offset, player.xy_tuple[1])
+        if "right" in traveling:
+            player.xy_tuple = (player.xy_tuple[0] + player_offset, player.xy_tuple[1])
         self.player = player
         self.camera = player.xy_tuple
+        self.entities = ai_units + [player]
 
     def draw_level(self):
         topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, \
@@ -274,9 +295,10 @@ class Game:
                 break
             shuffle(can_move)
             for entity in can_move:
-                # NOTE: testing
-                self.entity_ai_random_move(entity) 
-                #### 
+                if entity.name == "small convoy escort":
+                    self.entity_ai_small_convoy_escort(entity) 
+                elif entity.name == "freighter":
+                    self.move_entity(entity, entity.direction)
             self.time_units_passed += 1
         return
 
@@ -284,6 +306,15 @@ class Game:
     def entity_ai_random_move(self, entity):
         direction = choice(list(DIRECTIONS.keys())) 
         self.move_entity(entity, direction)
+
+    def entity_ai_small_convoy_escort(self, entity): 
+        torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
+            entity.contacts)
+        if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
+            self.console.push("<testing entity_ai_convoy_escort TORPEDO LAUNCH>")
+            self.sim_event_torpedo_launch(entity, torpedo_target.entity, TORPEDO_RANGE)
+        else:
+            self.move_entity(entity, entity.direction)
 
     def torpedo_arrival_check(self): 
         potential_targets = list(filter(lambda x: len(x.torpedos_incoming) > 0, self.entities))
@@ -367,7 +398,7 @@ class Game:
                         elif known is None:
                             target.contacts.append(contact)
 
-    def sim_event_entity_missile_detection(entity): 
+    def sim_event_entity_missile_detection(self, entity): 
         for missile in entity.missiles_incoming:
             launcher, target = missile.launcher, missile.target
             result = self.skill_check_detect_nearby_missile(launcher, target, target)
@@ -432,7 +463,6 @@ class Game:
         entity.next_move_time += ACTIVE_SONAR_TIME_COST
         alerted = list(filter(lambda x: x.has_skill("passive sonar") and x.has_ability("passive sonar"), potentials))
         for observer in alerted:
-            self.console.push("<testing observer detection")
             self.sim_event_propagate_new_contacts(entity, [Contact(entity, 100)])
 
     def sim_event_entity_conducts_psonar_detection(self, entity, new_contacts_ls) -> list:
@@ -576,7 +606,7 @@ class Game:
         # NOTE: This covers attacks both from and against the player
         self.display_changed = True
         launcher.raise_alert_level(AlertLevel.ENGAGED)
-        launched = self.skill_check_launch_torpedo(self.player)
+        launched = self.skill_check_launch_torpedo(launcher)
         if launched <= 0:
             # target detection:
             if target.can_detect_incoming_torpedos():
@@ -593,7 +623,8 @@ class Game:
             eta = self.time_units_passed + TORPEDO_SPEED * distance
             target.torpedos_incoming.append(LaunchedWeapon(eta, launcher, target, torp_range))
             self.push_to_console_if_player("TORPEDO LAUNCHED! (will reach target around: {})".format(eta), [launcher])
-            self.targeting_ability.ammo -= 1
+            torps = launcher.get_ability("torpedo")
+            torps.ammo -= 1
         else:
             self.push_to_console_if_player("torpedo fails to launch!", [launcher])
         # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
@@ -928,9 +959,14 @@ class Game:
             entity.xy_tuple[0] + DIRECTIONS[direction][0], 
             entity.xy_tuple[1] + DIRECTIONS[direction][1]
         )
+        if not self.tilemap.tile_in_bounds(target_xy_tuple) and not entity.player:
+            # NOTE: AI units despawn when moving off-map
+            if entity in self.entities:
+                self.entities.remove(entity)
         occupied = first(lambda x: x.xy_tuple == target_xy_tuple and entity is not x, self.entities)
         if occupied is not None and occupied not in list(map(lambda x: x.entity, entity.contacts)):
-            self.push_to_console_if_player("sonar reports suspicious noises in this direction {}".format(occupied.name), [entity])  # testing
+            self.push_to_console_if_player("sonar reports suspicious noises in this direction {}".format(occupied.name), \
+                [entity])  
             direction = "wait"
         if direction == "wait":
             entity.next_move_time = self.time_units_passed + WAIT_TU_COST

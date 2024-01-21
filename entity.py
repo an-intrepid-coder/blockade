@@ -30,7 +30,7 @@ class LaunchedWeapon:
         self.range = wep_range
 
 class Entity: 
-    def __init__(self, xy_tuple, faction): 
+    def __init__(self, xy_tuple, faction, direction=None, formation=None): 
         self.faction = faction
         self.xy_tuple = tuple(xy_tuple)
         self.image = None
@@ -68,6 +68,8 @@ class Entity:
         self.momentum = 0
         self.last_direction = "wait"
         self.submersible = False
+        self.direction = direction
+        self.formation = formation
 
     def get_adjusted_speed(self): 
         momentum_factor = self.momentum * MOMENTUM_FACTOR
@@ -175,8 +177,8 @@ class PlayerSub(Entity):
 
 class CoastalDefenseSub(Entity):
     # NOTE: This represents a relatively small, weak, and stealthy submarine the player might encounter near coastlines.
-    def __init__(self, xy_tuple, faction):
-        super().__init__(xy_tuple, faction)
+    def __init__(self, xy_tuple, faction, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
         self.name = "coastal submarine"
         self.can_ocean_move = True
@@ -200,8 +202,8 @@ class CoastalDefenseSub(Entity):
 class Freighter(Entity):
     # NOTE: This represents a totally unarmed freighter, and not a Q-ship or anything like that. But I will include
     #       such things later.
-    def __init__(self, xy_tuple, faction):
-        super().__init__(xy_tuple, faction)
+    def __init__(self, xy_tuple, faction, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_circle(faction_to_color[self.faction])
         self.name = "freighter" 
         self.can_ocean_move = True
@@ -216,11 +218,11 @@ class Freighter(Entity):
             ToggleSpeed()
         ]
 
-class Escort(Entity):
-    def __init__(self, xy_tuple, faction):
-        super().__init__(xy_tuple, faction)
+class SmallConvoyEscort(Entity):
+    def __init__(self, xy_tuple, faction, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction])
-        self.name = "escort" 
+        self.name = "small convoy escort" 
         self.can_ocean_move = True
         # NOTE: tentative values below
         self.skills["visual detection"] = 12
@@ -230,13 +232,13 @@ class Escort(Entity):
         self.skills["stealth"] = 8
         self.skills["point defense"] = 10
         self.skills["passive sonar"] = 13
+        self.skills["torpedo"] = 13
         self.hp = {"current": 10, "max": 10} 
         self.speed = 35
         self.abilities = [
             Radar(), 
             PassiveSonar(), 
-            ToggleSpeed()
-        ] # TODO: weapons
-
-# TODO: many more unit types
+            ToggleSpeed(),
+            ShortRangeTorpedo(),
+        ] 
 
