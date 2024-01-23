@@ -6,7 +6,7 @@ ability_types = [
     "missile", 
     "radar", 
     "passive sonar",
-    "active sonar", # TODO
+    "active sonar", 
     "intel report", # TODO
 ] 
 

@@ -5,11 +5,12 @@ from tile_map import TileMap
 from entity import *
 from euclidean import manhattan_distance, chebyshev_distance
 from functional import *
-from console import Console
+from console import *
 import modifiers
 from alert_level import AlertLevel
 import sort_keys
 from random import choice, randint, shuffle
+from unit_tile import *
 
 class SimStateSnapshot:
     pass # TODO
@@ -27,7 +28,7 @@ class Game:
         self.camera = (0, 0) # TODO: a little more camera hijackery
         self.entities = []
         self.console = Console()
-        self.displaying_hud = True # TODO: implement toggle key for this
+        self.displaying_hud = True 
         self.console_scrolled_up_by = 0 
         self.hud_font = pygame.font.Font(FONT_PATH, HUD_FONT_SIZE)
         self.overlay_sonar = False
@@ -39,8 +40,17 @@ class Game:
         self.generate_encounter_small_escorted_convoy_attack()
         self.time_units_passed = 0
         self.player_turn = 0
-        self.stealth = "hidden"
         self.player_turn_ended = False
+        self.debug = False
+        self.player_long_wait = False
+
+    def player_long_wait_check(self):
+        contacts = len(self.player.contacts) > 0
+        engaged = self.player.alert_level == AlertLevel.ENGAGED
+        eta = self.player.next_move_time <= self.time_units_passed
+        if eta or (contacts or engaged):
+            self.player_long_wait = False
+            self.player.next_move_time = self.time_units_passed 
 
     # Gets the shortest available route 
     def shortest_entity_path(self, start_loc, end_loc, valid_tile_types) -> list:  
@@ -106,8 +116,8 @@ class Game:
             fuzzed_spawn(origin, ai_units, SmallConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
         for _ in range(num_freighters):
             fuzzed_spawn(origin, ai_units, Freighter(origin, "enemy", direction=traveling), fuzz_val)
-        player_offset = 20
-        player = PlayerSub(origin)
+        player_offset = 24
+        player = PlayerSub(origin) 
         if "up" in traveling:
             player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] - player_offset)
         if "down" in traveling:
@@ -172,17 +182,31 @@ class Game:
             # NOTE: These sensor overlays may overlap
             if self.overlay_sonar: 
                 psonar_range = first(lambda x: x.type == "passive sonar", self.player.abilities).range
-                draw_overlay(psonar_range, (0, 220, 220, 170))
+                draw_overlay(psonar_range, SONAR_OVERLAY_COLOR)
             if self.overlay_radar:
                 radar_range = first(lambda x: x.type == "radar", self.player.abilities).range
-                draw_overlay(radar_range, (220, 220, 220, 170))
+                draw_overlay(radar_range, RADAR_OVERLAY_COLOR)
 
         # draw entities:
         for entity in self.entities:
-            if str(entity.xy_tuple) in relative_positions.keys() \
-                and ((entity in list(map(lambda x: x.entity, self.player.contacts))) or entity.player):
+            on_screen = str(entity.xy_tuple) in relative_positions.keys()
+            in_player_contacts = entity in list(map(lambda x: x.entity, self.player.contacts))
+            if on_screen and (in_player_contacts or entity.player or self.debug):
                 rect = relative_positions[str(entity.xy_tuple)]
-                self.screen.blit(entity.image, rect)
+                # contact identification:
+                contact = first(lambda x: x.entity is entity, self.player.contacts)
+                if entity.player \
+                    or entity.identified \
+                    or self.debug \
+                    or (contact is not None and contact.acc >= CONTACT_ACC_ID_THRESHOLD): 
+                    img = entity.image
+                    if not entity.identified:
+                        entity.identified = True
+                        if not entity.player:
+                            self.push_to_console("{} identified".format(entity.name))
+                else:
+                    img = unit_tile_circle("dark gray")
+                self.screen.blit(img, rect)
                 # a "tail" showing direction came from:
                 target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
                 tail_point = self.get_tail_point(entity, target) 
@@ -214,25 +238,35 @@ class Game:
             x, y = center[0] + CELL_SIZE // 2, center[1] - CELL_SIZE // 2
         return (x, y)
 
-    def draw_console(self):
+    def draw_console(self, tag):
+        applicable = list(filter(lambda x: x.tag == tag, self.console.messages))
         line_height = HUD_FONT_SIZE + 1
         num_lines = CONSOLE_LINES
-        console_size = (int(self.screen.get_width() * .4), line_height * num_lines)
+        console_width = int(self.screen.get_width() * .33)
+        console_size = (console_width, line_height * num_lines)
         console_surface = pygame.Surface(console_size, flags=SRCALPHA)
         console_surface.fill(HUD_OPAQUE_BLACK)
         pygame.draw.rect(console_surface, "cyan", (0, 0, console_size[0], console_size[1]), 1)
-        last = len(self.console.messages) - 1 
+        last = len(applicable) - 1 
         msgs = []
         for line in range(num_lines):
             index = last - line - self.console_scrolled_up_by
-            if index >= 0 and index < len(self.console.messages):
-                msgs.append(self.console.messages[index])
+            if index >= 0 and index < len(applicable):
+                msg = applicable[index]
+                if msg.tag == tag:
+                    txt = "[{}] {}".format(msg.turn, msg.msg)
+                    msgs.append(txt)
         msgs.reverse() 
         for line in range(len(msgs)):
             line_surface = self.hud_font.render(msgs[line], True, "white")
             console_surface.blit(line_surface, (0, line * line_height))
         y = self.screen.get_height() - line_height * num_lines - 3
-        x = (self.screen.get_width() - console_size[0]) // 2
+        if tag == "rolls":
+            x = 0
+        elif tag == "combat":
+            x = console_width + CONSOLE_PADDING
+        elif tag == "other":
+            x = (console_width + CONSOLE_PADDING) * 2 
         self.screen.blit(console_surface, (x, y)) 
 
     def draw_abilities(self):
@@ -256,11 +290,12 @@ class Game:
             "Turn: {}".format(self.player_turn),
             "Time: {}".format(self.time_units_passed),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
-            "Stealth: {}".format(self.stealth.upper()),
+            "Location: {}".format(self.player.xy_tuple),
             "Speed: {} ({})".format(self.player.speed_mode, self.player.get_adjusted_speed()),
             "Momentum: {}".format(self.player.momentum),
         ]
-        stats_size = (int(self.screen.get_width() * .1), len(stats_lines) * line_height)
+        stats_width = int(self.screen.get_width() * .13)
+        stats_size = (stats_width, len(stats_lines) * line_height)
         stats_surface = pygame.Surface(stats_size, flags=SRCALPHA)
         stats_surface.fill(HUD_OPAQUE_BLACK)
         pygame.draw.rect(stats_surface, "cyan", (0, 0, stats_size[0], stats_size[1]), 1)
@@ -271,7 +306,7 @@ class Game:
             y = line_height * count_y
             stats_surface.blit(text, (x, y))
             count_y += 1
-        pos = (int(self.screen.get_width() * .9), 0)
+        pos = (self.screen.get_width() - stats_width, 0)
         self.screen.blit(stats_surface, pos)
 
     def draw_target_stats(self):
@@ -294,7 +329,9 @@ class Game:
 
     def draw_hud(self):
         if self.displaying_hud:
-            self.draw_console()
+            self.draw_console("rolls")
+            self.draw_console("combat")
+            self.draw_console("other")
             self.draw_abilities()
             self.draw_player_stats() 
             self.draw_target_stats() 
@@ -314,6 +351,7 @@ class Game:
             # Keyboard Buttons (this game will be all buttons, as I want to prepare it for controller input)
             elif event.type == KEYDOWN: 
                 self.display_changed = self.keyboard_event_changed_display()
+        pygame.event.pump() 
 
     def dead_entity_check(self):
         new_entities = list(filter(lambda x: not x.dead, self.entities))
@@ -323,20 +361,28 @@ class Game:
         if self.player not in self.entities:
             # NOTE: place-holder
             self.running = False 
-
-    def run_ai_behavior(self): # NOTE: in progress
+    
+    def run_entity_behavior(self): # NOTE: in progress
         while True: 
             can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed, self.entities))
-            if any(map(lambda x: x.player, can_move)):
+            player_turn = any(map(lambda x: x.player, can_move))
+            if not player_turn and len(can_move) > 0:
+                shuffle(can_move)
+                for entity in can_move:
+                    if entity.name == "small convoy escort":
+                        self.entity_ai_small_convoy_escort(entity) 
+                    elif entity.name == "freighter":
+                        self.entity_ai_freighter(entity)
+            if len(can_move) > 0:
+                self.sensor_checks()
+                self.alert_check()
+                self.torpedo_arrival_check() 
+                self.missile_arrival_check() 
+                self.dead_entity_check()
+                self.player_long_wait_check() 
+            if player_turn:
                 break
-            shuffle(can_move)
-            for entity in can_move:
-                if entity.name == "small convoy escort":
-                    self.entity_ai_small_convoy_escort(entity) 
-                elif entity.name == "freighter":
-                    self.move_entity(entity, entity.direction)
             self.time_units_passed += 1
-        return
 
     # Moves an entity in a completely random direction
     def entity_ai_random_move(self, entity):
@@ -350,7 +396,14 @@ class Game:
                 return k
         return "wait"
 
-    def entity_ai_small_convoy_escort(self, entity):  # NOTE: In Progress
+    def entity_ai_small_convoy_escort(self, entity):  
+        if entity.alert_level.value >= 1:
+            asonar_target = 10
+        else:
+            asonar_target = 5 + entity.alert_level.value
+        asonar_roll = sum(roll3d6())
+        if asonar_roll <= asonar_target:
+            self.sim_event_entity_conducts_asonar_detection(entity)
         torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
             entity.contacts)
         if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
@@ -359,13 +412,17 @@ class Game:
             closest = entity.get_closest_contact() 
             path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple, ["ocean"]) 
             if path is not None:
-                self.console.push("<testing entity_ai_convoy_escort CHASE>")
                 direction = self.relative_direction(entity.xy_tuple, path[0]) 
-                self.move_entity(entity, direction) 
+                self.move_entity(entity, direction)
         else:
             self.move_entity(entity, entity.direction)
         if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
             entity.toggle_speed()
+
+    def entity_ai_freighter(self, entity):
+        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
+            entity.toggle_speed()
+        self.move_entity(entity, entity.direction)
 
     def torpedo_arrival_check(self): 
         potential_targets = list(filter(lambda x: len(x.torpedos_incoming) > 0, self.entities))
@@ -398,7 +455,6 @@ class Game:
 
     def sensor_checks(self): 
         # NOTE: player-allied surface vessels not in yet
-        # NOTE: missiles not in yet
         for entity in self.entities:
             new_contacts = []
             if entity.has_skill("visual detection"):
@@ -425,7 +481,8 @@ class Game:
                     contact.change_acc(-acc_pen)
                 if contact.acc == 0: 
                     entity.contacts.remove(contact)
-                    self.push_to_console_if_player("contact with {} lost".format(contact.entity.name), [entity])
+                    self.push_to_console_if_player("contact with {} lost".format(contact.entity.detected_str()), \
+                        [entity])
 
     def sim_event_propagate_new_contacts(self, entity, new_contacts): 
         entity.contacts.extend(new_contacts)
@@ -477,7 +534,7 @@ class Game:
                 # NOTE: for now, successful visual contacts are always 100% acc.
                 acc = 100
                 new_contact = Contact(target, acc)
-                self.push_to_console_if_player("{} visually detected with {}% accuracy!".format(target.name, acc), \
+                self.push_to_console_if_player("{} visually detected!".format(target.detected_str(), acc), \
                     [entity])
                 exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
                 exists_in_new_contacts = first(lambda x: x.entity is target, new)
@@ -508,13 +565,17 @@ class Game:
                 elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
                     exists_in_new_contacts.acc = acc
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via active sonar".format(target.name), [entity])
+                    self.push_to_console_if_player("{} detected via active sonar".format(target.detected_str()), \
+                        [entity])
                     new.append(new_contact)
         self.sim_event_propagate_new_contacts(entity, new)
         entity.next_move_time += ACTIVE_SONAR_TIME_COST
         alerted = list(filter(lambda x: x.has_skill("passive sonar") and x.has_ability("passive sonar"), potentials))
         for observer in alerted:
-            self.sim_event_propagate_new_contacts(entity, [Contact(entity, 100)])
+            if observer.faction != entity.faction \
+                and entity is not observer \
+                and entity not in list(map(lambda x: x.entity, observer.contacts)):
+                self.sim_event_propagate_new_contacts(observer, [Contact(entity, 100)])
 
     def sim_event_entity_conducts_psonar_detection(self, entity, new_contacts_ls) -> list:
         new = list(new_contacts_ls)
@@ -534,7 +595,8 @@ class Game:
                 elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
                     exists_in_new_contacts.acc = acc
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via passive sonar".format(target.name), [entity])
+                    self.push_to_console_if_player("{} detected via passive sonar".format(target.detected_str()), \
+                        [entity])
                     new.append(new_contact)
         return new
 
@@ -544,9 +606,8 @@ class Game:
         new = list(new_contacts_ls)
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= RADAR_RANGE \
-            and not x.submersible \
-            and x is not entity, self.entities)) + \
-            list(filter(lambda x: x.submersible_emitter(), self.entities))
+            and (not x.submersible or x.submersible_emitter()) \
+            and x is not entity, self.entities))
         for target in potentials:
             detected = self.skill_check_detect_radar_contact(entity, target)
             if detected <= 0:
@@ -560,7 +621,7 @@ class Game:
                 elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
                     exists_in_new_contacts.acc = acc
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via radar".format(target.name, acc), \
+                    self.push_to_console_if_player("{} detected via radar".format(target.detected_str(), acc), \
                         [entity])
                     new.append(new_contact)
         return new
@@ -569,28 +630,24 @@ class Game:
         for entity in self.entities:
             if len(entity.contacts) > 0:
                 entity.raise_alert_level(AlertLevel.ALERTED)
-
-    def turn_based_routines(self):
-        if self.player_turn_ended:
-            self.sensor_checks()
-            self.alert_check()
-            self.run_ai_behavior() # NOTE: in progress
-            self.torpedo_arrival_check() 
-            self.missile_arrival_check() 
-            self.dead_entity_check()
-            self.player_turn_ended = False
-
-    def update(self):
-        self.handle_events()
-        self.turn_based_routines()
+            elif entity.alert_level == AlertLevel.ENGAGED:
+                entity.alert_level = AlertLevel.ALERTED
 
     def keyboard_event_changed_display(self) -> bool:
-        return not self.input_blocked() and (self.moved() \
+        return not self.input_blocked() \
+            and (self.moved() \
             or self.console_scrolled() \
             or self.cancel_target_mode() \
             or self.cycle_target() \
             or self.fire_at_target() \
+            or self.toggled_hud() \
             or self.used_ability())
+
+    def toggled_hud(self) -> bool:
+        if self.shift_pressed() and pygame.key.get_pressed()[K_w]:
+            self.displaying_hud = not self.displaying_hud
+            return True
+        return False  
 
     def used_ability(self) -> bool:
         ability_key = self.ability_key_pressed()
@@ -613,7 +670,7 @@ class Game:
         if pygame.key.get_pressed()[K_f] and self.targeting_ability is not None:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
             if target.submersible and self.targeting_ability.type == "missile":
-                self.console.push("can't target submerged vessels with missiles!")
+                self.push_to_console("can't target submerged vessels with missiles!", tag="combat")
                 self.reset_target_mode()
                 return True
             if self.targeting_ability.type == "torpedo":
@@ -646,10 +703,11 @@ class Game:
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + MISSILE_SPEED * distance
             target.missiles_incoming.append(LaunchedWeapon(eta, launcher, target, missile_range))
-            self.push_to_console_if_player("MISSILE LAUNCHED! (will reach target around: {})".format(eta), [launcher])
+            self.push_to_console_if_player("MISSILE LAUNCHED! (eta: {})".format(eta), [launcher], \
+                tag="combat")
             self.targeting_ability.ammo -= 1
         else:
-            self.push_to_console_if_player("missile fails to launch!", [launcher])
+            self.push_to_console_if_player("missile fails to launch!", [launcher], tag="combat")
         # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
         time_cost = max(MISSILE_LAUNCH_COST_BASE + (launched * 2), 0)
         launcher.next_move_time = self.time_units_passed + time_cost
@@ -674,24 +732,31 @@ class Game:
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + TORPEDO_SPEED * distance
             target.torpedos_incoming.append(LaunchedWeapon(eta, launcher, target, torp_range))
-            self.push_to_console_if_player("TORPEDO LAUNCHED! (will reach target around: {})".format(eta), [launcher])
+            self.push_to_console_if_player("TORPEDO LAUNCHED! (eta: {})".format(eta), [launcher], \
+                tag="combat")
             torps = launcher.get_ability("torpedo")
             torps.ammo -= 1
         else:
-            self.push_to_console_if_player("torpedo fails to launch!", [launcher])
+            self.push_to_console_if_player("torpedo fails to launch!", [launcher], tag="combat")
         # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
         time_cost = max(TORPEDO_LAUNCH_COST_BASE + (launched * 2), 0)
         launcher.next_move_time = self.time_units_passed + time_cost
 
     def skill_check_evade_incoming_torpedo(self, torp) -> int:
         launcher, target = torp.launcher, torp.target
+        contact = first(lambda x: x.entity is target, launcher.contacts)
+        if contact is None:
+            acc = ORPHANED_TORPEDO_DEFAULT
+        else:
+            acc = contact.acc
         bonus = modifiers.pilot_torpedo_alert_mod(target.alert_level)
-        acc_pen = -((100 - first(lambda x: x.entity is target, launcher.contacts).acc) // 10)
+        acc_pen = -((100 - acc) // 10)
         contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=[bonus])
         result = contest["roll"]
         if contest["entity"] is launcher:
             result *= -1
-        self.push_to_console_if_player("[{}] Skill Contest (evade torpedo): {}".format(target.name, result), [target])
+        self.push_to_console_if_player("[{}] Skill Contest (evade torpedo): {}".format(target.name, result), [target], \
+            tag="rolls")
         return result
 
     def sim_event_missile_arrival(self, missile): 
@@ -721,18 +786,19 @@ class Game:
                 mods_b=[bonus, penalty])
             if missile_intercepted["entity"] is target and missile_intercepted["roll"] <= 0:
                 target.missiles_incoming.remove(missile)
-                self.push_to_console_if_player("{}'s missile intercepted!".format(launcher.name), [launcher, target])
+                self.push_to_console_if_player("{}'s missile intercepted!".format(launcher.name), [launcher, target], \
+                    tag="combat")
                 intercepted = True
         if not intercepted:
             dmg = roll_missile_damage()
             # TODO: (eventually a table of effects for damage rolls that are very high or low)
             target.change_hp(-dmg)
             if target.dead:
-                dmg_msg = "{} takes {} damage from a missile, and is destroyed!".format(target.name, dmg)
+                dmg_msg = "{} destroyed by missile!".format(target.name)
             else:
                 dmg_msg = "{} takes {} damage from a missile! ({} / {})".format(target.name, dmg, \
                     target.hp["current"], target.hp["max"])
-            self.push_to_console_if_player(dmg_msg, [launcher, target])
+            self.push_to_console_if_player(dmg_msg, [launcher, target], tag="combat")
         target.raise_alert_level(AlertLevel.ENGAGED)
 
     def sim_event_torpedo_arrival(self, torp): 
@@ -741,21 +807,22 @@ class Game:
         target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
         if target_detects <= 0 and target.is_mobile():
             target.raise_alert_level(AlertLevel.ENGAGED)
-            self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target])
+            self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target], \
+                tag="combat")
             evaded = self.skill_check_evade_incoming_torpedo(torp)
             if evaded <= 0 and target_detects <= 0:
                 msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
-                self.push_to_console_if_player(msg, [launcher, target])
+                self.push_to_console_if_player(msg, [launcher, target], tag="combat")
             else:
                 dmg = roll_torpedo_damage()
                 # TODO: (eventually a table of effects for damage rolls that are very high or low)
                 target.change_hp(-dmg)
                 if target.dead:
-                    dmg_msg = "{} takes {} damage from a torpedo, and is destroyed!".format(target.name, dmg)
+                    dmg_msg = "{} destroyed by torpedo!".format(target.name, dmg)
                 else:
                     dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
                         target.hp["current"], target.hp["max"])
-                self.push_to_console_if_player(dmg_msg, [launcher, target])
+                self.push_to_console_if_player(dmg_msg, [launcher, target], tag="combat")
 
     def skill_check_to_str(self, result) -> str:
         r_str = "failure"
@@ -771,7 +838,7 @@ class Game:
             # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
             #       on it alone.
             #self.push_to_console_if_player("[{}] Skill Check (visual detection): {}".format(observer.name, \
-            #    self.skill_check_to_str(result)), [observer])
+            #    self.skill_check_to_str(result)), [observer], tag="rolls")
             return result
         return FAIL_DEFAULT
 
@@ -779,12 +846,13 @@ class Game:
         result = roll_skill_check(sender, "radio")
         if result <= 0:
             self.push_to_console_if_player("[{}] Skill Check (radio send): {}".format(sender.name, \
-                result), [sender])
+                result), [sender], tag="rolls")
             return result
         return FAIL_DEFAULT
 
-    def skill_check_radio_incoming(self, receiver, sent_r) -> int:
-        result = roll_skill_check(receiver, "radio", mods=[receiver.alert_level.value, sent_r])
+    def skill_check_radio_incoming(self, receiver, sent_result) -> int:
+        mods = [receiver.alert_level.value, abs(sent_result)]
+        result = roll_skill_check(receiver, "radio", mods=mods)
         if result <= 0:
             return result
         return FAIL_DEFAULT
@@ -800,7 +868,7 @@ class Game:
         # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
         #       on it alone.
         #self.push_to_console_if_player("[{}] Skill Contest (active sonar detection): {}".format(observer.name, \
-        #    result), [observer])
+        #    result), [observer], tag="rolls")
         if winner is observer and result <= 0:
             return result
         return FAIL_DEFAULT
@@ -816,7 +884,7 @@ class Game:
         # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
         #       on it alone.
         #self.push_to_console_if_player("[{}] Skill Contest (passive sonar detection): {}".format(observer.name, \
-        #    result), [observer])
+        #    result), [observer], tag="rolls")
         if winner is observer and result <= 0:
             return result
         return FAIL_DEFAULT
@@ -828,20 +896,20 @@ class Game:
             # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
             #       on it alone.
             #self.push_to_console_if_player("[{}] Skill Check (radar detection): {}".format(observer.name, \
-            #    self.skill_check_to_str(result)), [observer])
+            #    self.skill_check_to_str(result)), [observer], tag="rolls")
             return result
         return FAIL_DEFAULT
 
     def skill_check_launch_torpedo(self, launcher) -> int:
         result = roll_skill_check(launcher, "torpedo")
         self.push_to_console_if_player("[{}] Skill Check (launch torpedo): {}".format(launcher.name, \
-            self.skill_check_to_str(result)), [launcher])
+            self.skill_check_to_str(result)), [launcher], tag="rolls")
         return result
 
     def skill_check_launch_missile(self, launcher) -> int:
         result = roll_skill_check(launcher, "missile")
         self.push_to_console_if_player("[{}] Skill Check (launch missile): {}".format(launcher.name, \
-            self.skill_check_to_str(result)), [launcher])
+            self.skill_check_to_str(result)), [launcher], tag="rolls")
         return result
 
     def skill_check_detect_nearby_missile(self, launcher, target, observer) -> int:
@@ -855,12 +923,12 @@ class Game:
             detected_visual = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value])
             if detected_visual <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (visually detect missile): {}".format(observer.name, \
-                    self.skill_check_to_str(detected_visual)), [observer])
+                    self.skill_check_to_str(detected_visual)), [observer], tag="rolls")
         if observer.has_skill("radar") and observer.has_ability("radar") and witness(RADAR_RANGE):
             detected_radar = roll_skill_check(observer, "radar", mods=[observer.alert_level.value])
             if detected_radar <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (detect torpedo via radar): {}".format(observer.name, \
-                    self.skill_check_to_str(detected_radar)), [observer])
+                    self.skill_check_to_str(detected_radar)), [observer], tag="rolls")
         if detected_visual or detected_radar: 
             return min([detected_visual, detected_radar])
         return FAIL_DEFAULT
@@ -877,21 +945,27 @@ class Game:
             detected_visual = roll_skill_check(observer, "visual detection", mods=[observer.alert_level.value])
             if detected_visual <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (visually detect torpedo): {}".format(observer.name, \
-                    self.skill_check_to_str(detected_visual)), [observer])
-        if observer.has_skill("passive sonar") and observer.has_ability("passive sonar") and witness(PASSIVE_SONAR_RANGE):
+                    self.skill_check_to_str(detected_visual)), [observer], tag="rolls")
+        if observer.has_skill("passive sonar") \
+            and observer.has_ability("passive sonar") \
+            and witness(PASSIVE_SONAR_RANGE):
             bonus = modifiers.noisy_torpedo_bonus_to_passive_sonar_detection
             detected_sonar = roll_skill_check(observer, "passive sonar", mods=[observer.alert_level.value, bonus])
             if detected_sonar <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (detect torpedo via sonar): {}".format(observer.name, \
-                    self.skill_check_to_str(detected_sonar)), [observer])
+                    self.skill_check_to_str(detected_sonar)), [observer], tag="rolls")
         if detected_visual or detected_sonar: 
             return min([detected_visual, detected_sonar])
         return FAIL_DEFAULT
 
-    def push_to_console_if_player(self, msg, entities):
+    def push_to_console_if_player(self, msg, entities, tag="other"):
         if any(filter(lambda x: x.player, entities)):
-            self.console.push(msg)
+            self.console.push(Message(msg, tag, self.player_turn))
             self.display_changed = True
+
+    def push_to_console(self, msg, tag="other"):
+        self.console.push(Message(msg, tag, self.player_turn))
+        self.display_changed = True
 
     def cycle_target(self) -> bool:
         if pygame.key.get_pressed()[K_TAB] and self.targeting_ability is not None:
@@ -934,10 +1008,10 @@ class Game:
         ability = self.player.get_ability(ability_type)
         targets = self.targets(self.player, ability_type)
         if ability.ammo <= 0:
-            self.console.push("out of ammo!") 
+            self.push_to_console("out of ammo!", tag="combat") 
             return False
         elif len(targets) == 0:
-            self.console.push("no valid targets in range ({})!".format(ability.range)) 
+            self.push_to_console("no valid targets in range ({})!".format(ability.range), tag="combat") 
             return False
         else:
             self.targeting_ability = ability
@@ -952,20 +1026,20 @@ class Game:
         ))[0][1] 
         if ability_type == "torpedo" or ability_type == "missile":
             if self.enter_target_mode(ability_type):
-                self.console.push("target mode: 'f' to fire, TAB to cycle, ESC to return")
+                self.push_to_console("target mode: 'f' to fire, TAB to cycle, ESC to return", tag="combat")
         elif ability_type == "passive sonar":
             self.overlay_sonar = not self.overlay_sonar
-            self.console.push("displaying passive sonar range: {}".format(self.overlay_sonar))
+            self.push_to_console("displaying passive sonar range: {}".format(self.overlay_sonar))
         elif ability_type == "radar":
             self.overlay_radar = not self.overlay_radar
             radar = self.player.get_ability("radar")
             radar.emerged_to_transmit = not radar.emerged_to_transmit
-            self.console.push("using radar and displaying range: {}".format(self.overlay_radar))
+            self.push_to_console("using radar and displaying range: {}".format(self.overlay_radar))
         elif ability_type == "toggle speed":
             self.player.toggle_speed()
-            self.console.push("speed mode is now: {}".format(self.player.speed_mode))
+            self.push_to_console("speed mode is now: {}".format(self.player.speed_mode))
         elif ability_type == "active sonar":
-            self.console.push("using active sonar!")
+            self.push_to_console("using active sonar!")
             self.sim_event_entity_conducts_asonar_detection(self.player)
             self.player_turn += 1
             self.player_turn_ended = True
@@ -987,6 +1061,9 @@ class Game:
             if len(self.console.messages) - (self.console_scrolled_up_by + 1) >= CONSOLE_LINES:
                 self.console_scrolled_up_by += 1
                 valid = True
+        elif pygame.key.get_pressed()[K_HOME]:
+            self.console_scrolled_up_by = 0
+            valid = True
         return valid
 
     def movement_key_pressed(self): # returns Key constant or False 
@@ -1010,6 +1087,9 @@ class Game:
             return K_PERIOD
         return False
 
+    def shift_pressed(self) -> bool:
+        return pygame.key.get_pressed()[K_RSHIFT] or pygame.key.get_pressed()[K_LSHIFT]
+
     def move_entity(self, entity, direction) -> bool:
         target_xy_tuple = (
             entity.xy_tuple[0] + DIRECTIONS[direction][0], 
@@ -1024,7 +1104,12 @@ class Game:
             self.push_to_console_if_player("suspicious noises in this direction {}".format(occupied.name), [entity])  
             direction = "wait"
         if direction == "wait":
-            entity.next_move_time = self.time_units_passed + WAIT_TU_COST
+            if not self.player_long_wait and self.shift_pressed():
+                self.player_long_wait = True
+                cost = LONG_WAIT_TU_COST
+            else:
+                cost = WAIT_TU_COST
+            entity.next_move_time = self.time_units_passed + cost
             entity.momentum = max(entity.momentum - 2, 0)
             entity.last_direction = direction
             return True
@@ -1052,6 +1137,16 @@ class Game:
         in_bounds = self.tilemap.tile_in_bounds(target_xy)
         occupied = any(map(lambda x: x.xy_tuple == target_xy, self.entities))
         return entity.is_mobile() and in_bounds and not occupied
+
+    def turn_based_routines(self):
+        if self.player_turn_ended or self.player_long_wait:
+            self.run_entity_behavior() 
+            if not self.player_long_wait:
+                self.player_turn_ended = False
+
+    def update(self):
+        self.handle_events()
+        self.turn_based_routines()
 
     def game_loop(self):
         while self.running: 

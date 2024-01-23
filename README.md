@@ -1,8 +1,8 @@
 # BLOCKADE 
 
-![Early Prototype Sandbox](screenshots/000.jpg)
+[![Early Prototype Level](screenshots/000_2t.jpg)](screenshots/000_2.jpg)
 
-**Status / Progress**: On the way to 0.0.0 (minimum viable prototype), and getting pretty close. Currently just a small sandbox level in which to fire torpedos at targets.
+**Status / Progress**: On the way to 0.0.0 (minimum viable prototype), and getting pretty close. Currently just a small sandbox level in which to attack a lightly defended convoy.
 
 **Version**: pre-0.0.0
 
