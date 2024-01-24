@@ -41,16 +41,17 @@ class Game:
         self.time_units_passed = 0
         self.player_turn = 0
         self.player_turn_ended = False
-        self.debug = False
+        self.debug = True
         self.player_long_wait = False
 
     def player_long_wait_check(self):
-        contacts = len(self.player.contacts) > 0
-        engaged = self.player.alert_level == AlertLevel.ENGAGED
-        eta = self.player.next_move_time <= self.time_units_passed
-        if eta or (contacts or engaged):
-            self.player_long_wait = False
-            self.player.next_move_time = self.time_units_passed 
+        if self.player_long_wait: 
+            contacts = len(self.player.contacts) > 0
+            engaged = self.player.alert_level == AlertLevel.ENGAGED
+            eta = self.player.next_move_time <= self.time_units_passed
+            if eta or (contacts or engaged):
+                self.player_long_wait = False
+                self.player.next_move_time = self.time_units_passed 
 
     # Gets the shortest available route 
     def shortest_entity_path(self, start_loc, end_loc, valid_tile_types) -> list:  
@@ -97,10 +98,12 @@ class Game:
         return False # NOTE: this will be used later
 
     def generate_encounter_small_escorted_convoy_attack(self): # NOTE: In Progress
+        # TODO: change this to convoy_attack, with flags for size, type, and number of escorts
+        #       as well as some flags for ASW airfields nearby. Can cover a wide variety of mission types here.
         self.tilemap = TileMap((200, 200), "open ocean")
         num_escorts, num_freighters = randint(2, 4), randint(3, 8)
         fuzz_val = num_escorts + num_freighters
-        traveling = choice(list(DIRECTIONS.keys()))
+        traveling = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
         origin = (self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2)
         def fuzzed_spawn(origin, spawn_ls, entity, fuzz):
             while True:
@@ -111,24 +114,28 @@ class Game:
                     entity.xy_tuple = spawn
                     spawn_ls.append(entity)
                     break
-        ai_units = []
+        def spawn_player(spawn_ls):
+            player_offset_fuzz = randint(-3, 6)
+            player_offset = 24 + player_offset_fuzz
+            player = PlayerSub(origin) 
+            if "up" in traveling:
+                player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] - player_offset)
+            if "down" in traveling:
+                player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] + player_offset)
+            if "left" in traveling:
+                player.xy_tuple = (player.xy_tuple[0] - player_offset, player.xy_tuple[1])
+            if "right" in traveling:
+                player.xy_tuple = (player.xy_tuple[0] + player_offset, player.xy_tuple[1])
+            self.player = player
+            self.camera = player.xy_tuple
+            spawn_ls.append(player)
+        units = []
         for _ in range(num_escorts):
-            fuzzed_spawn(origin, ai_units, SmallConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
+            fuzzed_spawn(origin, units, SmallConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
         for _ in range(num_freighters):
-            fuzzed_spawn(origin, ai_units, Freighter(origin, "enemy", direction=traveling), fuzz_val)
-        player_offset = 24
-        player = PlayerSub(origin) 
-        if "up" in traveling:
-            player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] - player_offset)
-        if "down" in traveling:
-            player.xy_tuple = (player.xy_tuple[0], player.xy_tuple[1] + player_offset)
-        if "left" in traveling:
-            player.xy_tuple = (player.xy_tuple[0] - player_offset, player.xy_tuple[1])
-        if "right" in traveling:
-            player.xy_tuple = (player.xy_tuple[0] + player_offset, player.xy_tuple[1])
-        self.player = player
-        self.camera = player.xy_tuple
-        self.entities = ai_units + [player]
+            fuzzed_spawn(origin, units, Freighter(origin, "enemy", direction=traveling), fuzz_val)
+        spawn_player(units) 
+        self.entities = units
 
     def draw_level(self):
         topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, \
@@ -477,7 +484,7 @@ class Game:
                 torp_contact = first(lambda x: x.launcher is entity, contact.entity.torpedos_incoming)
                 if torp_contact is None:
                     # NOTE: When targeted by an owned torpedo, contacts don't degrade
-                    acc_pen = sum(roll3d6())
+                    acc_pen = sum(roll3d6()) // 2
                     contact.change_acc(-acc_pen)
                 if contact.acc == 0: 
                     entity.contacts.remove(contact)
@@ -805,24 +812,26 @@ class Game:
         # evasion and damage
         launcher, target = torp.launcher, torp.target
         target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
+        successfully_evaded = False
         if target_detects <= 0 and target.is_mobile():
             target.raise_alert_level(AlertLevel.ENGAGED)
             self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target], \
                 tag="combat")
             evaded = self.skill_check_evade_incoming_torpedo(torp)
-            if evaded <= 0 and target_detects <= 0:
+            if evaded <= 0: 
                 msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
                 self.push_to_console_if_player(msg, [launcher, target], tag="combat")
+                successfully_evaded = True
+        if not successfully_evaded:
+            dmg = roll_torpedo_damage()
+            # TODO: (eventually a table of effects for damage rolls that are very high or low)
+            target.change_hp(-dmg)
+            if target.dead:
+                dmg_msg = "{} destroyed by torpedo!".format(target.name, dmg)
             else:
-                dmg = roll_torpedo_damage()
-                # TODO: (eventually a table of effects for damage rolls that are very high or low)
-                target.change_hp(-dmg)
-                if target.dead:
-                    dmg_msg = "{} destroyed by torpedo!".format(target.name, dmg)
-                else:
-                    dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
-                        target.hp["current"], target.hp["max"])
-                self.push_to_console_if_player(dmg_msg, [launcher, target], tag="combat")
+                dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
+                    target.hp["current"], target.hp["max"])
+            self.push_to_console_if_player(dmg_msg, [launcher, target], tag="combat")
 
     def skill_check_to_str(self, result) -> str:
         r_str = "failure"
