@@ -85,3 +85,6 @@ speed_modes = ["normal", "fast"]
 factions = ["allied", "enemy", "neutral"]
 faction_to_color = {"allied": "cyan", "neutral": "green", "enemy": "red"} 
 
+MINI_MAP_SIZE = (500, 500)  
+MM_CELL_SIZE = 4 
+

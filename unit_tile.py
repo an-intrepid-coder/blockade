@@ -28,4 +28,11 @@ def unit_tile_triangle(color, upsidedown=False):
     base.blit(image, (int(image.get_width() * .33), int(image.get_height() * .33)))
     return base
 
+def unidentified_unit_tile(entity):
+    if entity.name == "freighter":
+        return unit_tile_circle("dark gray")
+    elif entity.name == "small convoy escort":
+        return unit_tile_triangle("dark gray")
+    elif entity.name == "escort sub":
+        return unit_tile_triangle("dark gray", upsidedown=True)
 

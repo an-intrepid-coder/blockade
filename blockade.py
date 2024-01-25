@@ -25,7 +25,7 @@ class Game:
         self.screen.set_colorkey(ALPHA_KEY)
         self.clock = pygame.time.Clock()
         self.tilemap = None
-        self.camera = (0, 0) # TODO: a little more camera hijackery
+        self.camera = (0, 0) 
         self.entities = []
         self.console = Console()
         self.displaying_hud = True 
@@ -37,19 +37,55 @@ class Game:
         self.targeting_index = {"current": 0, "max": 0}
         self.sim_snapshots = [] 
         self.player = None
-        self.generate_encounter_small_escorted_convoy_attack()
+        self.generate_encounter_convoy_attack(freighters=True, escorts=True, subs=True) # NOTE: in progress
         self.time_units_passed = 0
         self.player_turn = 0
         self.player_turn_ended = False
-        self.debug = True
+        self.debug = False
+        self.log_sim_events = False
+        self.log_ai_routines = False
         self.player_long_wait = False
+        self.mini_map = None 
+        self.displaying_mini_map = False 
+        if self.debug:
+            self.player.hp = {"current": 2000, "max": 2000}  
+        self.update_mini_map()
+
+    def update_mini_map(self):  
+        surf = pygame.Surface((self.tilemap.wh_tuple[0] * MM_CELL_SIZE, self.tilemap.wh_tuple[1] * MM_CELL_SIZE))
+        # draw tilemap
+        for x in range(self.tilemap.wh_tuple[0]):
+            for y in range(self.tilemap.wh_tuple[1]):
+                rect = (x * MM_CELL_SIZE, y * MM_CELL_SIZE, MM_CELL_SIZE, MM_CELL_SIZE)
+                tile = self.tilemap.get_tile((x, y))
+                if tile.tile_type == "ocean":
+                    pygame.draw.rect(surf, "navy", rect)
+                elif tile.tile_type == "land":
+                    pygame.draw.rect(surf, "olive", rect)
+        # draw entities:
+        for entity in self.entities:
+            in_player_contacts = entity in list(map(lambda x: x.entity, self.player.contacts))
+            if in_player_contacts or entity.player or self.debug:
+                rect = (entity.xy_tuple[0] * MM_CELL_SIZE, entity.xy_tuple[1] * MM_CELL_SIZE, MM_CELL_SIZE, \
+                    MM_CELL_SIZE) 
+                contact = first(lambda x: x.entity is entity, self.player.contacts)
+                if entity.player \
+                    or entity.identified \
+                    or self.debug \
+                    or (contact is not None and contact.acc >= CONTACT_ACC_ID_THRESHOLD): 
+                    color = faction_to_color[entity.faction]
+                else:
+                    color = "dark gray"
+                pygame.draw.rect(surf, color, rect)
+        pygame.draw.rect(surf, "cyan", (0, 0, surf.get_width(), surf.get_height()), 2)
+        self.mini_map = pygame.transform.scale(surf, MINI_MAP_SIZE)
 
     def player_long_wait_check(self):
         if self.player_long_wait: 
             contacts = len(self.player.contacts) > 0
             engaged = self.player.alert_level == AlertLevel.ENGAGED
             eta = self.player.next_move_time <= self.time_units_passed
-            if eta or (contacts or engaged):
+            if eta or contacts or engaged:
                 self.player_long_wait = False
                 self.player.next_move_time = self.time_units_passed 
 
@@ -97,12 +133,16 @@ class Game:
     def input_blocked(self):
         return False # NOTE: this will be used later
 
-    def generate_encounter_small_escorted_convoy_attack(self): # NOTE: In Progress
-        # TODO: change this to convoy_attack, with flags for size, type, and number of escorts
-        #       as well as some flags for ASW airfields nearby. Can cover a wide variety of mission types here.
+    def generate_encounter_convoy_attack(self, freighters=False, escorts=False, subs=False): # NOTE: In Progress
         self.tilemap = TileMap((200, 200), "open ocean")
-        num_escorts, num_freighters = randint(2, 4), randint(3, 8)
-        fuzz_val = num_escorts + num_freighters
+        num_freighters, num_escorts, num_subs = 0, 0, 0
+        if escorts:
+            num_escorts += randint(2, 6)
+        if subs:
+            num_subs += randint(1, 4)
+        if freighters:
+            num_freighters += randint(3, 8)
+        fuzz_val = sum([num_escorts, num_freighters, num_subs]) + 1
         traveling = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
         origin = (self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2)
         def fuzzed_spawn(origin, spawn_ls, entity, fuzz):
@@ -134,16 +174,18 @@ class Game:
             fuzzed_spawn(origin, units, SmallConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
         for _ in range(num_freighters):
             fuzzed_spawn(origin, units, Freighter(origin, "enemy", direction=traveling), fuzz_val)
+        for _ in range(num_subs):
+            fuzzed_spawn(origin, units, EscortSub(origin, "enemy", direction=traveling), fuzz_val)
         spawn_player(units) 
         self.entities = units
 
-    def draw_level(self):
+    def draw_level(self, grid_lines=True):
         topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, \
             self.camera[1] - self.screen_wh_cells_tuple[1] // 2)
         relative_positions = {}
 
         # draw tilemap
-        count_x, count_y = 0, 0
+        count_x, count_y = 0, 0 
         for x in range(topleft[0], topleft[0] + self.screen_wh_cells_tuple[0]):
             for y in range(topleft[1], topleft[1] + self.screen_wh_cells_tuple[1]):
                 rect = (count_x * CELL_SIZE, count_y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
@@ -156,7 +198,8 @@ class Game:
                         pygame.draw.rect(self.screen, "olive", rect)
                 else:
                     pygame.draw.rect(self.screen, "black", rect)
-                pygame.draw.rect(self.screen, "gray", rect, 1)
+                if grid_lines:
+                    pygame.draw.rect(self.screen, "gray", rect, 1)
                 count_y += 1
             count_x += 1
             count_y = 0
@@ -291,6 +334,11 @@ class Game:
             count_y += 1
         self.screen.blit(abilities_surface, (0, 0)) 
 
+    def draw_mini_map(self):
+        x = self.screen.get_width() // 2 - self.mini_map.get_width() // 2
+        y = self.screen.get_height() // 2 - self.mini_map.get_height() // 2
+        self.screen.blit(self.mini_map, (x, y)) 
+
     def draw_player_stats(self):
         line_height = HUD_FONT_SIZE + 1
         stats_lines = [
@@ -321,7 +369,7 @@ class Game:
             target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
             contact = first(lambda x: x.entity is target, self.player.contacts)
             target_stats = [
-                "Target Name: {}".format(target.name),
+                "Target Name: {}".format(target.detected_str()),
                 "HP: {}/{}".format(target.hp["current"], target.hp["max"]),
                 "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
                 "Detection: {}%".format(contact.acc),
@@ -342,6 +390,8 @@ class Game:
             self.draw_abilities()
             self.draw_player_stats() 
             self.draw_target_stats() 
+        if self.displaying_mini_map and self.mini_map is not None:
+            self.draw_mini_map() 
 
     def draw(self):
         self.screen.fill("black")
@@ -373,6 +423,8 @@ class Game:
         while True: 
             can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed, self.entities))
             player_turn = any(map(lambda x: x.player, can_move))
+            if player_turn:
+                break
             if not player_turn and len(can_move) > 0:
                 shuffle(can_move)
                 for entity in can_move:
@@ -380,16 +432,9 @@ class Game:
                         self.entity_ai_small_convoy_escort(entity) 
                     elif entity.name == "freighter":
                         self.entity_ai_freighter(entity)
-            if len(can_move) > 0:
-                self.sensor_checks()
-                self.alert_check()
-                self.torpedo_arrival_check() 
-                self.missile_arrival_check() 
-                self.dead_entity_check()
-                self.player_long_wait_check() 
-            if player_turn:
-                break
-            self.time_units_passed += 1
+                    elif entity.name == "escort sub":
+                        self.entity_ai_escort_sub(entity)
+            self.time_units_passed += 1 
 
     # Moves an entity in a completely random direction
     def entity_ai_random_move(self, entity):
@@ -403,14 +448,50 @@ class Game:
                 return k
         return "wait"
 
-    def entity_ai_small_convoy_escort(self, entity):  
-        if entity.alert_level.value >= 1:
+    def entity_ai_small_convoy_escort(self, entity):
+        if self.log_ai_routines:
+            print("entity_ai_small_convoy_escort()")
+        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
+            entity.toggle_speed()
+        used_asonar = False
+        asonar_target = FAIL_DEFAULT
+        if entity.alert_level.value >= 1 and len(entity.contacts) == 0:
             asonar_target = 10
-        else:
+        elif len(entity.contacts) == 0:
             asonar_target = 5 + entity.alert_level.value
-        asonar_roll = sum(roll3d6())
-        if asonar_roll <= asonar_target:
+        if asonar_target != FAIL_DEFAULT:
+            asonar_roll = sum(roll3d6())
+            if asonar_roll <= asonar_target:
+                self.sim_event_entity_conducts_asonar_detection(entity)
+                used_asonar = True
+        torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
+            entity.contacts)
+        if used_asonar:
+            return
+        if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
+            self.sim_event_torpedo_launch(entity, torpedo_target.entity, TORPEDO_RANGE)
+        elif len(entity.contacts) > 0:
+            closest = entity.get_closest_contact() 
+            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple, ["ocean"]) 
+            if path is not None:
+                direction = self.relative_direction(entity.xy_tuple, path[0]) 
+                self.move_entity(entity, direction)
+        else:
+            self.move_entity(entity, entity.direction)
+
+    def entity_ai_escort_sub(self, entity): 
+        if self.log_ai_routines:
+            print("entity_ai_escort_sub")
+        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
+            entity.toggle_speed()
+        used_asonar = False
+        if entity.alert_level.value >= 1 and len(entity.contacts) == 0:
+            asonar_target = 10
+            asonar_roll = sum(roll3d6())
             self.sim_event_entity_conducts_asonar_detection(entity)
+            used_asonar = True
+        if used_asonar:
+            return
         torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
             entity.contacts)
         if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
@@ -423,10 +504,10 @@ class Game:
                 self.move_entity(entity, direction)
         else:
             self.move_entity(entity, entity.direction)
-        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
-            entity.toggle_speed()
 
     def entity_ai_freighter(self, entity):
+        if self.log_ai_routines:
+            print("entity_ai_freighter")
         if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
             entity.toggle_speed()
         self.move_entity(entity, entity.direction)
@@ -479,6 +560,8 @@ class Game:
 
     # Contact accuracy degrades every turn by 3d6% when not actively being sensed
     def sim_event_degrade_old_contacts(self, entity, new_contacts):
+        if self.log_sim_events:
+            print("sim_event_degrade_old_contacts({})".format(entity.name))
         for contact in entity.contacts:
             if contact not in new_contacts:
                 torp_contact = first(lambda x: x.launcher is entity, contact.entity.torpedos_incoming)
@@ -492,11 +575,13 @@ class Game:
                         [entity])
 
     def sim_event_propagate_new_contacts(self, entity, new_contacts): 
+        if self.log_sim_events:
+            print("sim_event_propagate_new_contacts({})".format(entity.name))
         entity.contacts.extend(new_contacts)
         if entity.submersible:
             # NOTE: submersible entities will propagate contacts only when exposed to do so via an antenna, once
             #       that mechanic is implemented.
-            return
+            return 
         sent = self.skill_check_radio_outgoing(entity)
         if sent <= 0:
             receivers = list(filter(lambda x: x is not entity \
@@ -514,6 +599,8 @@ class Game:
                             target.contacts.append(contact)
 
     def sim_event_entity_missile_detection(self, entity): 
+        if self.log_sim_events:
+            print("sim_event_entity_missile_detection({})".format(entity.name))
         for missile in entity.missiles_incoming:
             launcher, target = missile.launcher, missile.target
             result = self.skill_check_detect_nearby_missile(launcher, target, target)
@@ -522,6 +609,8 @@ class Game:
                 break
 
     def sim_event_entity_torpedo_detection(self, entity): 
+        if self.log_sim_events:
+            print("sim_event_entity_torpedo_detection({})".format(entity.name))
         for torp in entity.torpedos_incoming:
             launcher, target = torp.launcher, torp.target
             result = self.skill_check_detect_nearby_torpedo(launcher, target, target)
@@ -530,6 +619,8 @@ class Game:
                 break
 
     def sim_event_entity_conducts_visual_detection(self, entity, new_contacts_ls) -> list:
+        if self.log_sim_events:
+            print("sim_event_entity_conducts_visual_detection({})".format(entity.name))
         new = list(new_contacts_ls)
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= RANGE_VISUAL_DETECTION \
@@ -554,6 +645,8 @@ class Game:
         return new
 
     def sim_event_entity_conducts_asonar_detection(self, entity):
+        if self.log_sim_events:
+            print("sim_event_entity_conducts_asonar_detection({})".format(entity.name))
         # NOTE: unlike psonar, this is conducted independently of passive sensor_checks() as an action
         new = []
         potentials = list(filter(lambda x: x.faction != entity.faction \
@@ -576,7 +669,7 @@ class Game:
                         [entity])
                     new.append(new_contact)
         self.sim_event_propagate_new_contacts(entity, new)
-        entity.next_move_time += ACTIVE_SONAR_TIME_COST
+        entity.next_move_time = self.time_units_passed + ACTIVE_SONAR_TIME_COST
         alerted = list(filter(lambda x: x.has_skill("passive sonar") and x.has_ability("passive sonar"), potentials))
         for observer in alerted:
             if observer.faction != entity.faction \
@@ -585,6 +678,8 @@ class Game:
                 self.sim_event_propagate_new_contacts(observer, [Contact(entity, 100)])
 
     def sim_event_entity_conducts_psonar_detection(self, entity, new_contacts_ls) -> list:
+        if self.log_sim_events:
+            print("sim_event_entity_conducts_psonar_detection({})".format(entity.name))
         new = list(new_contacts_ls)
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= PASSIVE_SONAR_RANGE \
@@ -608,6 +703,8 @@ class Game:
         return new
 
     def sim_event_entity_conducts_radar_detection(self, entity, new_contacts_ls) -> list:
+        if self.log_sim_events:
+            print("sim_event_entity_conducts_radar_detection({})".format(entity.name))
         if not self.overlay_radar:
             return []
         new = list(new_contacts_ls)
@@ -643,12 +740,19 @@ class Game:
     def keyboard_event_changed_display(self) -> bool:
         return not self.input_blocked() \
             and (self.moved() \
+            or self.toggled_mini_map() \
             or self.console_scrolled() \
             or self.cancel_target_mode() \
             or self.cycle_target() \
             or self.fire_at_target() \
             or self.toggled_hud() \
             or self.used_ability())
+
+    def toggled_mini_map(self) -> bool:
+        if pygame.key.get_pressed()[K_m]:
+            self.displaying_mini_map = not self.displaying_mini_map
+            return True
+        return False
 
     def toggled_hud(self) -> bool:
         if self.shift_pressed() and pygame.key.get_pressed()[K_w]:
@@ -665,6 +769,12 @@ class Game:
 
     def moved(self) -> bool:
         move_key = self.movement_key_pressed()
+        if move_key and KEY_TO_DIRECTION[move_key] != "wait" and self.shift_pressed():
+            self.move_camera(KEY_TO_DIRECTION[move_key])
+            return True 
+        elif move_key and KEY_TO_DIRECTION[move_key] == "wait" and self.ctrl_pressed():
+            self.camera = self.player.xy_tuple
+            return True
         if move_key and not self.targeting_ability:
             if self.move_entity(self.player, KEY_TO_DIRECTION[move_key]):
                 self.player_turn += 1
@@ -691,6 +801,8 @@ class Game:
         return False
 
     def sim_event_missile_launch(self, launcher, target, missile_range): 
+        if self.log_sim_events:
+            print("sim_event_missile_launch({})".format([launcher.name, target.name]))
         # NOTE: This covers attacks both from and against the player
         self.display_changed = True
         launcher.raise_alert_level(AlertLevel.ENGAGED)
@@ -720,6 +832,8 @@ class Game:
         launcher.next_move_time = self.time_units_passed + time_cost
 
     def sim_event_torpedo_launch(self, launcher, target, torp_range):
+        if self.log_sim_events:
+            print("sim_event_torpedo_launch({})".format([launcher.name, target.name]))
         # NOTE: This covers attacks both from and against the player
         self.display_changed = True
         launcher.raise_alert_level(AlertLevel.ENGAGED)
@@ -767,6 +881,8 @@ class Game:
         return result
 
     def sim_event_missile_arrival(self, missile): 
+        if self.log_sim_events:
+            print("sim_event_missile_arrival({})".format([missile.launcher.name, missile.target.name]))
         # countermeasures and damage
         launcher, target = missile.launcher, missile.target
         roller, intercepted  = None, False
@@ -809,6 +925,8 @@ class Game:
         target.raise_alert_level(AlertLevel.ENGAGED)
 
     def sim_event_torpedo_arrival(self, torp): 
+        if self.log_sim_events:
+            print("sim_event_torpedo_arrival({})".format([torp.launcher.name, torp.target.name]))
         # evasion and damage
         launcher, target = torp.launcher, torp.target
         target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
@@ -963,6 +1081,8 @@ class Game:
             if detected_sonar <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (detect torpedo via sonar): {}".format(observer.name, \
                     self.skill_check_to_str(detected_sonar)), [observer], tag="rolls")
+                if target is self.player:
+                    self.push_to_console("Incoming torpedo!", tag="combat")
         if detected_visual or detected_sonar: 
             return min([detected_visual, detected_sonar])
         return FAIL_DEFAULT
@@ -1099,6 +1219,17 @@ class Game:
     def shift_pressed(self) -> bool:
         return pygame.key.get_pressed()[K_RSHIFT] or pygame.key.get_pressed()[K_LSHIFT]
 
+    def ctrl_pressed(self) -> bool:
+        return pygame.key.get_pressed()[K_RCTRL] or pygame.key.get_pressed()[K_LCTRL]
+
+    def move_camera(self, direction):
+        target_xy_tuple = (
+            self.camera[0] + DIRECTIONS[direction][0], 
+            self.camera[1] + DIRECTIONS[direction][1]
+        )
+        if self.tilemap.tile_in_bounds(target_xy_tuple):
+            self.camera = target_xy_tuple
+
     def move_entity(self, entity, direction) -> bool:
         target_xy_tuple = (
             entity.xy_tuple[0] + DIRECTIONS[direction][0], 
@@ -1113,7 +1244,7 @@ class Game:
             self.push_to_console_if_player("suspicious noises in this direction {}".format(occupied.name), [entity])  
             direction = "wait"
         if direction == "wait":
-            if not self.player_long_wait and self.shift_pressed():
+            if entity.player and not self.player_long_wait and self.shift_pressed():
                 self.player_long_wait = True
                 cost = LONG_WAIT_TU_COST
             else:
@@ -1121,6 +1252,8 @@ class Game:
             entity.next_move_time = self.time_units_passed + cost
             entity.momentum = max(entity.momentum - 2, 0)
             entity.last_direction = direction
+            if entity.player:
+                self.camera = self.player.xy_tuple
             return True
         if self.entity_can_move(entity, direction):
             entity.xy_tuple = target_xy_tuple
@@ -1147,11 +1280,23 @@ class Game:
         occupied = any(map(lambda x: x.xy_tuple == target_xy, self.entities))
         return entity.is_mobile() and in_bounds and not occupied
 
+    def player_debug_mode_contacts(self):
+        self.player.contacts = list(map(lambda x: Contact(x, 100), filter(lambda x: not x.player, self.entities)))
+
     def turn_based_routines(self):
         if self.player_turn_ended or self.player_long_wait:
             self.run_entity_behavior() 
+            self.sensor_checks()
+            self.alert_check()
+            self.torpedo_arrival_check() 
+            self.missile_arrival_check() 
+            self.dead_entity_check()
+            self.player_long_wait_check() 
             if not self.player_long_wait:
                 self.player_turn_ended = False
+            if self.debug:
+                self.player_debug_mode_contacts()
+            self.update_mini_map() 
 
     def update(self):
         self.handle_events()

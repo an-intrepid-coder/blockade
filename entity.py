@@ -70,9 +70,11 @@ class Entity:
         self.last_direction = "wait"
         self.submersible = False
         self.direction = direction
-        self.formation = formation
         self.saved_path = None
         self.identified = False
+        # NOTE: For now, mission scope assumes all enemy entities are in a single "formation". But larger mission types
+        #       in future versions will require assigning each unit to a specific formation w/ a specific task.
+        self.formation = formation
 
     def detected_str(self) -> str:
         if self.identified:
@@ -176,17 +178,18 @@ class PlayerSub(Entity):
         self.submersible = True
         self.abilities.sort(key=sort_keys.abilities)
 
-class CoastalDefenseSub(Entity):
-    # NOTE: This represents a relatively small, weak, and stealthy submarine the player might encounter near coastlines.
+class EscortSub(Entity):
+    # NOTE: This represents a relatively weak submarine the player might encounter guarding convoys
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
-        self.name = "coastal submarine"
+        self.name = "escort sub"  
         self.can_ocean_move = True
         self.abilities = [
             ShortRangeTorpedo(), 
             PassiveSonar(), 
-            ToggleSpeed()
+            ToggleSpeed(),
+            ActiveSonar(),
         ]
         # NOTE: tentative values below
         self.skills["stealth"] = 14
@@ -197,7 +200,7 @@ class CoastalDefenseSub(Entity):
         self.skills["periscope"] = 12
         self.skills["radio"] = 12
         self.hp = {"current": 7, "max": 7} 
-        self.speed = 38
+        self.speed = 35
         self.submersible = True
 
 class Freighter(Entity):
