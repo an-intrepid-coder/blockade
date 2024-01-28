@@ -3,6 +3,16 @@ from euclidean import manhattan_distance
 
 # situational roll modifiers
 
+# penalty to torpedo evasion if they are not known about
+# NOTE: The offchance of an unknown torpedo to be "evaded" represents targeting errors, duds, etc.
+unknown_torpedo_evasion_penalty = -6
+
+# bonus to torpedo evasion if in fast mode
+fast_mode_torpedo_evasion_bonus = 2
+
+# penalty to stealth if in fast mode
+fast_mode_stealth_penalty = -2
+
 # applies to situations where passive sonar is detecting a torpedo
 noisy_torpedo_bonus_to_passive_sonar_detection = 2
 
@@ -31,5 +41,5 @@ def moving_psonar_mod(observer, target) -> int:
 
 def sonar_distance_mod(observer, target) -> int:
     # NOTE: This may be a non-linear function down the road
-    return -manhattan_distance(observer.xy_tuple, target.xy_tuple)
+    return max(-manhattan_distance(observer.xy_tuple, target.xy_tuple), -3)
 

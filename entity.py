@@ -24,14 +24,19 @@ class Contact:
             self.acc = 100
 
 class LaunchedWeapon:
-    def __init__(self, eta, launcher, target, wep_range):
+    def __init__(self, eta, launcher, target, wep_range, known=False):
         self.eta = eta
         self.launcher = launcher
         self.target = target
         self.range = wep_range
+        self.gui_alert = False
+        self.known = known
 
 class Entity: 
+    entities = 0
     def __init__(self, xy_tuple, faction, direction=None, formation=None): 
+        self.id = Entity.entities
+        Entity.entities += 1
         self.faction = faction
         self.xy_tuple = tuple(xy_tuple)
         self.image = None
@@ -76,6 +81,21 @@ class Entity:
         #       in future versions will require assigning each unit to a specific formation w/ a specific task.
         self.formation = formation
 
+    def dmg_str(self) -> str:
+        if self.hp["current"] == self.hp["max"]:
+            return "undamaged"
+        return "damaged"
+
+    def known_torpedos(self) -> list:
+        return list(filter(lambda x: x.known, self.torpedos_incoming))
+
+    def unknown_torpedos(self) -> list:
+        return list(filter(lambda x: not x.known, self.torpedos_incoming))
+
+    def hit_the_gas_if_in_danger(self):
+        if self.alert_level.value >= 1 and self.speed_mode == "normal":
+            self.toggle_speed()
+
     def detected_str(self) -> str:
         if self.identified:
             name = self.name
@@ -88,10 +108,14 @@ class Entity:
             return False
         return self.submersible and self.get_ability("radar").emerged_to_transmit
 
-    def get_closest_contact(self):
+    def get_closest_contact(self, hostile_only=False):
         closest = None
         minimum = None
-        for contact in self.contacts:
+        if hostile_only:
+            contacts = self.get_hostile_contacts()
+        else:
+            contacts = self.contacts
+        for contact in contacts:
             d = manhattan_distance(self.xy_tuple, contact.entity.xy_tuple)
             if closest is None:
                 closest = contact
@@ -100,6 +124,9 @@ class Entity:
                 closest = contact
                 minimum = d
         return closest
+
+    def get_hostile_contacts(self):
+        return list(filter(lambda x: x.entity.faction != self.faction and x.entity.faction != "neutral", self.contacts))
 
     def get_adjusted_speed(self): 
         momentum_factor = self.momentum * MOMENTUM_FACTOR
@@ -163,7 +190,7 @@ class PlayerSub(Entity):
             ShortRangeMissile()
         ]
         # NOTE: tentative values below
-        self.skills["stealth"] = 16
+        self.skills["stealth"] = 18 
         self.skills["passive sonar"] = 13
         self.skills["torpedo"] = 15
         self.skills["missile"] = 15

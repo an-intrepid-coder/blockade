@@ -20,6 +20,7 @@ class Tile:
     def __init__(self, xy_tuple, tile_type):
         self.xy_tuple = xy_tuple
         self.tile_type = tile_type
+        self.occupied = False 
 
 geography_types = ["open ocean", "coastline", "bay", "peninsula", "archipelago", "inland sea"]
 
@@ -82,9 +83,17 @@ class TileMap:
 
     def neighbors_of(self, tile_xy) -> list:
         neighbors = []
-        for _, v in DIRECTIONS.items():
+        for k, v in DIRECTIONS.items():
+            if k == "wait":
+                continue
             target_xy = (tile_xy[0] + v[0], tile_xy[1] + v[1])
             if self.tile_in_bounds(target_xy):
                 neighbors.append(self.get_tile(target_xy))
         return neighbors
-            
+
+    def toggle_occupied(self, xy_tuple) -> bool:
+        self.tiles[xy_tuple[0]][xy_tuple[1]].occupied = not self.tiles[xy_tuple[0]][xy_tuple[1]].occupied
+
+    def occupied(self, xy_tuple) -> bool:
+        return self.tiles[xy_tuple[0]][xy_tuple[1]].occupied 
+

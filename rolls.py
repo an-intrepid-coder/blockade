@@ -5,8 +5,8 @@ def roll3d6() -> list:
     rolls.sort()
     return rolls
 
-# NOTE: May differentiate damage types more down the road
-#       and/or include some modifiers here.
+# NOTE: Specific rolls may use more/less dice, or take
+#       modifiers, at some point.
 def roll_for_initiative() -> int:
     return sum(roll3d6())
 
@@ -15,6 +15,12 @@ def roll_torpedo_damage() -> int:
 
 def roll_missile_damage() -> int:
     return sum(roll3d6())
+
+def roll_for_acc_degradation() -> int:
+    return sum(roll3d6()) // 2
+
+def roll_for_acc_upgrade() -> int:
+    return sum(roll3d6()) // 2
 
 # Similar to the way skill checks work in GURPS.
 def roll_skill_check(entity, skill, mods=[]) -> int:

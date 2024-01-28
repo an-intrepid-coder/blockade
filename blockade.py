@@ -9,8 +9,10 @@ from console import *
 import modifiers
 from alert_level import AlertLevel
 import sort_keys
-from random import choice, randint, shuffle
+from random import choice, randint, shuffle, randrange
 from unit_tile import *
+import time
+import heapq
 
 class SimStateSnapshot:
     pass # TODO
@@ -35,21 +37,48 @@ class Game:
         self.overlay_radar = False
         self.targeting_ability = None 
         self.targeting_index = {"current": 0, "max": 0}
+        self.observation_index = 0
         self.sim_snapshots = [] 
         self.player = None
-        self.generate_encounter_convoy_attack(freighters=True, escorts=True, subs=True) # NOTE: in progress
+        self.generate_encounter_convoy_attack(freighters=True, \
+            escorts=True, \
+            subs=True, \
+            neutral_freighters=True) # NOTE: in progress
         self.time_units_passed = 0
         self.player_turn = 0
         self.player_turn_ended = False
+        self.processing = False
         self.debug = False
         self.log_sim_events = False
         self.log_ai_routines = False
+        self.pathfinding_perf = False
         self.player_long_wait = False
         self.mini_map = None 
         self.displaying_mini_map = False 
         if self.debug:
             self.player.hp = {"current": 2000, "max": 2000}  
         self.update_mini_map()
+        self.map_distance_to_player = self.djikstra_map_distance_to_player()
+
+    def incoming_torp_alert(self):
+        incoming = 0
+        for torp in self.player.known_torpedos():
+            if not torp.gui_alert:
+                incoming += 1
+                torp.gui_alert = True
+        if incoming > 0:
+            self.push_to_console("{} NEW INCOMING TORPEDOS(s)!".format(incoming), tag="combat")
+
+    def djikstra_map_distance_to_player(self):
+        valid_tile_types = ["ocean"] # TODO: land units and land tiles
+        def fitness_function(tile):
+            score = manhattan_distance(tile.xy_tuple, self.player.xy_tuple)
+            terrain_is_valid = tile.tile_type in valid_tile_types
+            if not terrain_is_valid: 
+                score = INVALID_DJIKSTRA_SCORE
+            return score
+        djikstra_map = [list(map(lambda tile: fitness_function(tile), col)) for col in self.tilemap.tiles] 
+        return djikstra_map
 
     def update_mini_map(self):  
         surf = pygame.Surface((self.tilemap.wh_tuple[0] * MM_CELL_SIZE, self.tilemap.wh_tuple[1] * MM_CELL_SIZE))
@@ -90,58 +119,136 @@ class Game:
                 self.player.next_move_time = self.time_units_passed 
 
     # Gets the shortest available route 
-    def shortest_entity_path(self, start_loc, end_loc, valid_tile_types) -> list:  
-        def get_traceback(seen) -> list:  
-            current = seen[-1]  
-            traceback = [current["loc"]]
-            seen.reverse()
-            while current["loc"] is not start_loc:
-                for node in seen:
-                    if node["loc"] is current["via"]:
-                        if node["loc"] is not start_loc:
-                            traceback.append(node["loc"])
+    def shortest_entity_path(self, start_loc, end_loc) -> list:  
+        tiles_searched = 0
+        traceback_start, traceback_end = None, None
+        if self.pathfinding_perf:
+            start = time.process_time_ns()
+        def print_end_time(start, tiles_searched, found, msg=None):
+            end = time.process_time_ns()
+            tot = end - start
+            if found:
+                traceback_tot = traceback_end - traceback_start
+            player_neighbors = list(map(lambda x: x.xy_tuple, self.tilemap.neighbors_of(self.player.xy_tuple)))
+            player_surrounded = len(list(filter(lambda x: x.xy_tuple in player_neighbors, self.entities))) == 8
+            start_entity = first(lambda x: x.xy_tuple == start_loc, self.entities)
+            start_neighbors = list(map(lambda x: x.xy_tuple, self.tilemap.neighbors_of(start_loc)))
+            start_entity_surrounded = len(list(filter(lambda x: x.xy_tuple in start_neighbors, self.entities))) == 8
+            next_to_target = chebyshev_distance(start_loc, end_loc) == 1
+            distance = manhattan_distance(start_loc, end_loc)
+            end_entity = first(lambda x: x.xy_tuple == end_loc, self.entities)
+            print("__profiling shortest_entity_path()") 
+            print("\ttiles_searched: {}".format(tiles_searched)) 
+            print("\ttot: {}ns".format(tot)) 
+            if found:
+                print("\tsearch: {}ns".format(traceback_start - start))
+                print("\ttraceback: {}ns".format(traceback_tot)) 
+            print("\tdistance: {}".format(distance)) 
+            print("\tfound: {}".format(found))
+            print("\tstart_entity: {}".format(start_entity.name))
+            print("\tstart_entity_id: {}".format(start_entity.id))
+            print("\tstart_entity surrounded: {}".format(start_entity_surrounded))
+            print("\tend_entity: {}".format(end_entity.name))
+            print("\tplayer surrounded: {}".format(player_surrounded))
+            print("\tnext_to_target: {}".format(next_to_target))
+            if msg is not None:
+                print("\tmsg: {}".format(msg))
+        
+        # edge case (1) of target surrounded and searching entity not among the surrounders
+        end_neighbors = list(map(lambda x: x.xy_tuple, self.tilemap.neighbors_of(end_loc)))
+        end_entity_surrounded = len(list(filter(lambda x: x.xy_tuple in end_neighbors, self.entities))) == 8
+        start_entity = first(lambda x: x.xy_tuple == start_loc, self.entities)
+        if end_entity_surrounded and start_entity.xy_tuple not in end_neighbors:
+            if self.pathfinding_perf:
+                print_end_time(start, tiles_searched, False, msg="edge case (1)") 
+            return None 
+        # edge case (2) of target being next to entity
+        next_to_target = chebyshev_distance(start_loc, end_loc) == 1
+        if next_to_target:
+            if self.pathfinding_perf:
+                print_end_time(start, tiles_searched, False, msg="edge case (2)") 
+            return None 
+
+        def get_traceback(visited, goal) -> list:  
+            nonlocal traceback_start, traceback_end
+            traceback_start = time.process_time_ns() 
+            current = goal
+            traceback = [goal[2]["loc"]]
+            while current[2]["loc"] is not start_loc: 
+                for node in visited:                     
+                    if node[2]["loc"] is current[2]["via"]:
+                        if node[2]["loc"] is not start_loc:
+                            traceback.append(node[2]["loc"])
                         current = node
+                        break
             traceback.reverse()
+            if self.pathfinding_perf:
+                traceback_end = time.process_time_ns()
+                print_end_time(start, tiles_searched, True) 
             return traceback 
 
-        seen = [{"loc": start_loc, "via": None}]
-        while True:  
-            hits = False
-            for node in seen:
-                distance = manhattan_distance(node["loc"], end_loc)
-                neighbors = self.tilemap.neighbors_of(node["loc"]) 
-                for loc in neighbors:
-                    not_seen = loc.xy_tuple not in list(map(lambda x: x["loc"], seen))
-                    valid_terrain = self.tilemap.get_tile(loc.xy_tuple).tile_type in valid_tile_types
-                    closer = manhattan_distance(loc.xy_tuple, end_loc) < distance
-                    not_occupied = first(lambda x: x.xy_tuple == loc.xy_tuple, self.entities) is None 
-                    goal_reached = loc.xy_tuple == end_loc
-                    new_node = {"loc": loc.xy_tuple, "via": node["loc"]}
-                    if not_seen and valid_terrain and closer and not_occupied:
-                        seen.append(new_node)
-                        hits = True
-                    if goal_reached:
-                        seen.append(new_node)
-                        return get_traceback(seen)
-            if not hits:
-                break
-        return None
+        seen = []
+        visited = []
+        seen_bools = [[False for y in range(self.tilemap.wh_tuple[1])] for x in range(self.tilemap.wh_tuple[0])] 
+        seen_count = 1
+        start_score = self.map_distance_to_player[start_loc[0]][start_loc[1]]
+        seen_bools[start_loc[0]][start_loc[1]] = True
+        start_node = [start_score, 0, {"loc": start_loc, "via": None}]
+        heapq.heappush(seen, start_node)
+        visited.append(start_node)
+        while len(seen) > 0:  
+            node = heapq.heappop(seen)    
+            neighbors = self.tilemap.neighbors_of(node[2]["loc"]) 
+            tile = first(lambda x: seen_bools[x.xy_tuple[0]][x.xy_tuple[1]] == False, neighbors)
+            if tile is not None:
+                seen_count += 1
+                heapq.heappush(seen, node)
+                tiles_searched += 1
+                score = self.map_distance_to_player[tile.xy_tuple[0]][tile.xy_tuple[1]]
+                if tile.occupied:
+                    score = INVALID_DJIKSTRA_SCORE 
+                new_node = {"loc": tile.xy_tuple, "via": node[2]["loc"]}
+                full_node = [score, seen_count, new_node]
+                heapq.heappush(seen, full_node)
+                visited.append(full_node)
+                seen_bools[tile.xy_tuple[0]][tile.xy_tuple[1]] = True
+                if tile.xy_tuple == end_loc:
+                    return get_traceback(visited, full_node)
+
+        if self.pathfinding_perf:
+            dbg_found = end_loc in list(map(lambda x: x[2]["loc"], visited))
+            if dbg_found:
+                print_end_time(start, tiles_searched, False, msg="FALSE NEGATIVE")
+            print_end_time(start, tiles_searched, False)
+        return None 
 
     def snapshot_sim(self): # TODO: implement sim state snapshotting
         pass
 
     def input_blocked(self):
-        return False # NOTE: this will be used later
+        # NOTE: later will also block for some pop-up animations and stuff!
+        return self.processing
 
-    def generate_encounter_convoy_attack(self, freighters=False, escorts=False, subs=False): # NOTE: In Progress
+    def generate_encounter_convoy_attack(self, \
+            scale=1, \
+            freighters=False, \
+            escorts=False, \
+            subs=False, \
+            neutral_freighters=False): 
         self.tilemap = TileMap((200, 200), "open ocean")
-        num_freighters, num_escorts, num_subs = 0, 0, 0
-        if escorts:
-            num_escorts += randint(2, 6)
-        if subs:
-            num_subs += randint(1, 4)
-        if freighters:
-            num_freighters += randint(3, 8)
+        num_freighters, num_escorts, num_subs, num_neutral_freighters = 0, 0, 0, 0
+        # NOTE: When campaign sim is in place, the number and type of ships available will depend on campaign
+        #       progress, and some RNG. All current ship numbers highly tentative.
+        for pop in range(scale):
+            if escorts:
+                num_escorts += randint(SMALL_CONVOY_ESCORTS_PER_SCALE[0], SMALL_CONVOY_ESCORTS_PER_SCALE[1])
+            if subs:
+                num_subs += randint(ESCORT_SUBS_PER_SCALE[0], ESCORT_SUBS_PER_SCALE[1])
+            if freighters:
+                num_freighters += randint(FREIGHTERS_PER_SCALE[0], FREIGHTERS_PER_SCALE[1])
+        # NOTE: neutral freighters don't influence enemy spawning fuzz, nor is their population determined by scale.
+        if neutral_freighters:
+            num_neutral_freighters += randint(1, 10)
         fuzz_val = sum([num_escorts, num_freighters, num_subs]) + 1
         traveling = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
         origin = (self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2)
@@ -153,6 +260,15 @@ class Game:
                 if first(lambda x: x.xy_tuple == spawn, spawn_ls) is None:
                     entity.xy_tuple = spawn
                     spawn_ls.append(entity)
+                    self.tilemap.toggle_occupied(spawn)
+                    break
+        def random_spawn(spawn_ls, entity):
+            while True:
+                spawn = (randrange(0, self.tilemap.wh_tuple[0]), randrange(0, self.tilemap.wh_tuple[1]))
+                if first(lambda x: x.xy_tuple == spawn, spawn_ls) is None:
+                    entity.xy_tuple = spawn
+                    spawn_ls.append(entity)
+                    self.tilemap.toggle_occupied(spawn)
                     break
         def spawn_player(spawn_ls):
             player_offset_fuzz = randint(-3, 6)
@@ -169,6 +285,7 @@ class Game:
             self.player = player
             self.camera = player.xy_tuple
             spawn_ls.append(player)
+            self.tilemap.toggle_occupied(player.xy_tuple)
         units = []
         for _ in range(num_escorts):
             fuzzed_spawn(origin, units, SmallConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
@@ -177,6 +294,9 @@ class Game:
         for _ in range(num_subs):
             fuzzed_spawn(origin, units, EscortSub(origin, "enemy", direction=traveling), fuzz_val)
         spawn_player(units) 
+        for _ in range(num_neutral_freighters):
+            direction = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
+            random_spawn(units, Freighter(origin, "neutral", direction=direction))
         self.entities = units
 
     def draw_level(self, grid_lines=True):
@@ -219,13 +339,8 @@ class Game:
                     surf = pygame.Surface((cell[2], cell[3]), flags=SRCALPHA)
                     surf.fill(color)
                     self.screen.blit(surf, (cell[0], cell[1]))
-            # lay down reticule if ability targeting:
-            if self.targeting_ability is not None:
-                target_cell = relative_positions[str(self.camera)]
-                target = (target_cell[0] + CELL_SIZE // 2, target_cell[1] + CELL_SIZE // 2)
-                pygame.draw.circle(self.screen, "magenta", target, int(CELL_SIZE * .66), 2)
 
-        # overlays (TODO: a few more)
+        # overlays 
         if self.targeting_ability is not None:
             draw_overlay(self.targeting_ability.range, HUD_OPAQUE_RED)
         else:
@@ -254,18 +369,30 @@ class Game:
                         entity.identified = True
                         if not entity.player:
                             self.push_to_console("{} identified".format(entity.name))
+                elif entity.submersible:
+                    img = unit_tile_triangle("dark gray", upsidedown=True)
                 else:
                     img = unit_tile_circle("dark gray")
                 self.screen.blit(img, rect)
+                if not entity.identified and self.overlay_sonar:
+                    acc_txt = self.hud_font.render("{}".format(contact.acc), "black", True, "white")
+                    pos = (rect[0] + CELL_SIZE // 2 - acc_txt.get_width() // 2,
+                           rect[1] + CELL_SIZE // 2 - acc_txt.get_height() // 2)
+                    self.screen.blit(acc_txt, pos)
                 # a "tail" showing direction came from:
                 target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
                 tail_point = self.get_tail_point(entity, target) 
                 pygame.draw.line(self.screen, "white", target, tail_point, 2) 
-                # reticule if currently targeted by a player weapon:
+                # marker if currently targeted by a player weapon: 
                 torps = list(map(lambda x: x.launcher.player, entity.torpedos_incoming))
                 missiles = list(map(lambda x: x.launcher.player, entity.missiles_incoming))
                 if any(torps + missiles):
-                    pygame.draw.circle(self.screen, "yellow", target, int(CELL_SIZE * .66), 2)
+                    pygame.draw.circle(self.screen, "yellow", target, int(CELL_SIZE * .66), 4)
+                # reticule if camera on AI unit:
+                if entity.xy_tuple == self.camera and not entity.player:
+                    target_cell = relative_positions[str(self.camera)]
+                    target = (target_cell[0] + CELL_SIZE // 2, target_cell[1] + CELL_SIZE // 2)
+                    pygame.draw.circle(self.screen, "magenta", target, int(CELL_SIZE * .66), 2)
 
     def get_tail_point(self, entity, center) -> tuple:
         if entity.last_direction == "wait":
@@ -345,7 +472,9 @@ class Game:
             "Turn: {}".format(self.player_turn),
             "Time: {}".format(self.time_units_passed),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
+            "Inc. Torps: {}".format(len(self.player.known_torpedos())), 
             "Location: {}".format(self.player.xy_tuple),
+            "Camera: {}".format(self.camera),
             "Speed: {} ({})".format(self.player.speed_mode, self.player.get_adjusted_speed()),
             "Momentum: {}".format(self.player.momentum),
         ]
@@ -365,12 +494,13 @@ class Game:
         self.screen.blit(stats_surface, pos)
 
     def draw_target_stats(self):
-        if self.targeting_ability is not None:
-            target = self.targets(self.player, self.targeting_ability.type)[self.targeting_index["current"]]
+        target = first(lambda x: not x.player and x.xy_tuple == self.camera, self.entities)
+        if target is not None:
             contact = first(lambda x: x.entity is target, self.player.contacts)
             target_stats = [
                 "Target Name: {}".format(target.detected_str()),
-                "HP: {}/{}".format(target.hp["current"], target.hp["max"]),
+                "Distance: {}".format(manhattan_distance(self.player.xy_tuple, target.xy_tuple)),
+                "HP: {}".format(target.dmg_str()),
                 "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
                 "Detection: {}%".format(contact.acc),
             ]
@@ -406,7 +536,7 @@ class Game:
             if event.type == QUIT:
                 self.running = False
             # Keyboard Buttons (this game will be all buttons, as I want to prepare it for controller input)
-            elif event.type == KEYDOWN: 
+            elif event.type == KEYDOWN and not self.input_blocked(): 
                 self.display_changed = self.keyboard_event_changed_display()
         pygame.event.pump() 
 
@@ -414,10 +544,12 @@ class Game:
         new_entities = list(filter(lambda x: not x.dead, self.entities))
         if len(new_entities) < len(self.entities):
             self.entities = new_entities
+            self.player.contacts = list(filter(lambda x: x.entity in new_entities, self.player.contacts)) 
             self.display_changed = True
         if self.player not in self.entities:
-            # NOTE: place-holder
+            # NOTE: place-holder for a splash screen and stats, etc.
             self.running = False 
+            print("...you died...") 
     
     def run_entity_behavior(self): # NOTE: in progress
         while True: 
@@ -438,6 +570,8 @@ class Game:
 
     # Moves an entity in a completely random direction
     def entity_ai_random_move(self, entity):
+        if self.log_ai_routines:
+            print("entity_ai_random_move()")
         direction = choice(list(DIRECTIONS.keys())) 
         self.move_entity(entity, direction)
 
@@ -448,69 +582,74 @@ class Game:
                 return k
         return "wait"
 
-    def entity_ai_small_convoy_escort(self, entity):
+    def entity_ai_attempt_to_follow_course(self, entity):
         if self.log_ai_routines:
-            print("entity_ai_small_convoy_escort()")
-        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
-            entity.toggle_speed()
+            print("entity_ai_attempt_to_follow_course()")
+        if self.entity_can_move(entity, entity.direction):
+            self.move_entity(entity, entity.direction)
+        else:
+            self.entity_ai_random_move(entity)
+
+    def entity_ai_active_sonar_use(self, entity, sneaky=False) -> bool:
+        if self.log_ai_routines:
+            print("entity_ai_active_sonar_use()")
         used_asonar = False
-        asonar_target = FAIL_DEFAULT
-        if entity.alert_level.value >= 1 and len(entity.contacts) == 0:
-            asonar_target = 10
-        elif len(entity.contacts) == 0:
-            asonar_target = 5 + entity.alert_level.value
-        if asonar_target != FAIL_DEFAULT:
+        asonar_target = None
+        if entity.alert_level.value >= 1 and len(entity.get_hostile_contacts()) == 0:
+            asonar_target = ASONAR_USE_TARGET_ALERTED
+        elif not sneaky and len(entity.get_hostile_contacts()) == 0:
+            asonar_target = ASONAR_USE_TARGET_UNALERTED + entity.alert_level.value
+        if asonar_target is not None:
             asonar_roll = sum(roll3d6())
             if asonar_roll <= asonar_target:
                 self.sim_event_entity_conducts_asonar_detection(entity)
                 used_asonar = True
+        return used_asonar
+
+    def entity_ai_shoot_at_or_close_with_target(self, entity) -> bool:
+        if self.log_ai_routines:
+            print("entity_ai_shoot_at_or_close_with_target()")
         torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
-            entity.contacts)
-        if used_asonar:
-            return
+            entity.get_hostile_contacts())
         if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
             self.sim_event_torpedo_launch(entity, torpedo_target.entity, TORPEDO_RANGE)
-        elif len(entity.contacts) > 0:
-            closest = entity.get_closest_contact() 
-            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple, ["ocean"]) 
+            return True
+        elif len(entity.get_hostile_contacts()) > 0:
+            closest = entity.get_closest_contact(hostile_only=True) 
+            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple) 
             if path is not None:
                 direction = self.relative_direction(entity.xy_tuple, path[0]) 
                 self.move_entity(entity, direction)
-        else:
-            self.move_entity(entity, entity.direction)
+            else: 
+                self.entity_ai_random_move(entity)
+            return True
+        return False
+
+    def entity_ai_small_convoy_escort(self, entity): 
+        if self.log_ai_routines:
+            print("entity_ai_small_convoy_escort()")
+        entity.hit_the_gas_if_in_danger()
+        if self.entity_ai_active_sonar_use(entity):
+            return
+        elif self.entity_ai_shoot_at_or_close_with_target(entity):
+            return
+        self.entity_ai_attempt_to_follow_course(entity)
 
     def entity_ai_escort_sub(self, entity): 
         if self.log_ai_routines:
-            print("entity_ai_escort_sub")
-        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
-            entity.toggle_speed()
-        used_asonar = False
-        if entity.alert_level.value >= 1 and len(entity.contacts) == 0:
-            asonar_target = 10
-            asonar_roll = sum(roll3d6())
-            self.sim_event_entity_conducts_asonar_detection(entity)
-            used_asonar = True
-        if used_asonar:
+            print("entity_ai_escort_sub()")
+        entity.hit_the_gas_if_in_danger()
+        if self.entity_ai_active_sonar_use(entity, sneaky=True):
             return
-        torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
-            entity.contacts)
-        if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
-            self.sim_event_torpedo_launch(entity, torpedo_target.entity, TORPEDO_RANGE)
-        elif len(entity.contacts) > 0:
-            closest = entity.get_closest_contact() 
-            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple, ["ocean"]) 
-            if path is not None:
-                direction = self.relative_direction(entity.xy_tuple, path[0]) 
-                self.move_entity(entity, direction)
-        else:
-            self.move_entity(entity, entity.direction)
+        elif self.entity_ai_shoot_at_or_close_with_target(entity):
+            return
+        self.entity_ai_attempt_to_follow_course(entity)
 
     def entity_ai_freighter(self, entity):
         if self.log_ai_routines:
             print("entity_ai_freighter")
-        if entity.alert_level.value >= 1 and entity.speed_mode == "normal":
-            entity.toggle_speed()
-        self.move_entity(entity, entity.direction)
+        entity.hit_the_gas_if_in_danger()
+        self.entity_ai_attempt_to_follow_course(entity)
 
     def torpedo_arrival_check(self): 
         potential_targets = list(filter(lambda x: len(x.torpedos_incoming) > 0, self.entities))
@@ -549,7 +688,7 @@ class Game:
                 new_contacts.extend(self.sim_event_entity_conducts_visual_detection(entity, new_contacts))
             if entity.has_ability("passive sonar") and entity.has_skill("passive sonar"):
                 new_contacts.extend(self.sim_event_entity_conducts_psonar_detection(entity, new_contacts)) 
-                if len(entity.torpedos_incoming) > 0 and entity.alert_level != AlertLevel.ENGAGED:
+                if len(entity.unknown_torpedos()) > 0:
                     self.sim_event_entity_torpedo_detection(entity) 
             if entity.has_ability("radar") and entity.has_skill("radar"):
                 new_contacts.extend(self.sim_event_entity_conducts_radar_detection(entity, new_contacts))
@@ -558,16 +697,27 @@ class Game:
             self.sim_event_degrade_old_contacts(entity, new_contacts)
             self.sim_event_propagate_new_contacts(entity, new_contacts) 
 
-    # Contact accuracy degrades every turn by 3d6% when not actively being sensed
+    # Contact accuracy degrades every turn when not actively being sensed
     def sim_event_degrade_old_contacts(self, entity, new_contacts):
         if self.log_sim_events:
             print("sim_event_degrade_old_contacts({})".format(entity.name))
+        def in_sensor_range(entity, contact):
+            d = manhattan_distance(entity.xy_tuple, contact.entity.xy_tuple)
+            sensable = False
+            if entity.has_skill("visual detection") and d <= RANGE_VISUAL_DETECTION and not contact.entity.submersible:
+                sensable = True
+            if entity.has_skill("passive sonar") and entity.has_ability("passive sonar") and d <= PASSIVE_SONAR_RANGE:
+                sensable = True
+            if entity.has_skill("radar") and entity.has_ability("radar") \
+                and (contact.entity.submersible_emitter() or not contact.entity.submersible):
+                sensable = True
+            return sensable
         for contact in entity.contacts:
             if contact not in new_contacts:
                 torp_contact = first(lambda x: x.launcher is entity, contact.entity.torpedos_incoming)
-                if torp_contact is None:
+                if torp_contact is None and not in_sensor_range(entity, contact):
                     # NOTE: When targeted by an owned torpedo, contacts don't degrade
-                    acc_pen = sum(roll3d6()) // 2
+                    acc_pen = roll_for_acc_degradation()
                     contact.change_acc(-acc_pen)
                 if contact.acc == 0: 
                     entity.contacts.remove(contact)
@@ -579,8 +729,8 @@ class Game:
             print("sim_event_propagate_new_contacts({})".format(entity.name))
         entity.contacts.extend(new_contacts)
         if entity.submersible:
-            # NOTE: submersible entities will propagate contacts only when exposed to do so via an antenna, once
-            #       that mechanic is implemented.
+            # NOTE: submersible entities will propagate contacts only when exposed to do so via an antenna, at
+            #       some point.
             return 
         sent = self.skill_check_radio_outgoing(entity)
         if sent <= 0:
@@ -593,8 +743,8 @@ class Game:
                     if received <= 0:
                         # NOTE: I may include some acc degradation based on margin of success later on
                         known = first(lambda x: x.entity is contact.entity, target.contacts)
-                        if known is not None and known.acc < contact.acc:
-                            known.acc = contact.acc
+                        if known is not None: 
+                            known.acc += roll_for_acc_upgrade()
                         elif known is None:
                             target.contacts.append(contact)
 
@@ -611,12 +761,12 @@ class Game:
     def sim_event_entity_torpedo_detection(self, entity): 
         if self.log_sim_events:
             print("sim_event_entity_torpedo_detection({})".format(entity.name))
-        for torp in entity.torpedos_incoming:
+        for torp in entity.unknown_torpedos(): 
             launcher, target = torp.launcher, torp.target
             result = self.skill_check_detect_nearby_torpedo(launcher, target, target)
             if result <= 0:
                 entity.raise_alert_level(AlertLevel.ENGAGED)
-                break
+                torp.known = True
 
     def sim_event_entity_conducts_visual_detection(self, entity, new_contacts_ls) -> list:
         if self.log_sim_events:
@@ -655,18 +805,17 @@ class Game:
         for target in potentials:
             detected = self.skill_check_detect_asonar_contact(entity, target) 
             if detected <= 0:
-                # NOTE: asonar contacts come with a range of accuracy ratings based on roll's margin of success 
-                acc = min(80 + 10 * abs(detected), 100)
+                acc = self.initial_sonar_acc(entity, target, detected, active=True)
                 new_contact = Contact(target, acc)
                 exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
                 exists_in_new_contacts = first(lambda x: x.entity is target, new)
-                if exists_in_old_contacts is not None and exists_in_old_contacts.acc < acc:
-                    exists_in_old_contacts.acc = acc
-                elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
-                    exists_in_new_contacts.acc = acc
+                if exists_in_old_contacts is not None:
+                    exists_in_old_contacts.acc += roll_for_acc_upgrade()
+                elif exists_in_new_contacts is not None:
+                    exists_in_new_contacts.acc += roll_for_acc_upgrade()
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via active sonar".format(target.detected_str()), \
-                        [entity])
+                    self.push_to_console_if_player("{} detected via active sonar ({})".format(target.detected_str(), \
+                        target.xy_tuple), [entity])
                     new.append(new_contact)
         self.sim_event_propagate_new_contacts(entity, new)
         entity.next_move_time = self.time_units_passed + ACTIVE_SONAR_TIME_COST
@@ -687,20 +836,37 @@ class Game:
         for target in potentials:
             detected = self.skill_check_detect_psonar_contact(entity, target)
             if detected <= 0:
-                # NOTE: psonar contacts come with a range of accuracy ratings based on roll's margin of success 
-                acc = min(50 + 10 * abs(detected), 100)
+                acc = self.initial_sonar_acc(entity, target, detected)
                 new_contact = Contact(target, acc)
                 exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
                 exists_in_new_contacts = first(lambda x: x.entity is target, new)
-                if exists_in_old_contacts is not None and exists_in_old_contacts.acc < acc:
-                    exists_in_old_contacts.acc = acc
-                elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
-                    exists_in_new_contacts.acc = acc
+                if exists_in_old_contacts is not None: 
+                    exists_in_old_contacts.acc += roll_for_acc_upgrade()
+                elif exists_in_new_contacts is not None: 
+                    exists_in_new_contacts.acc += roll_for_acc_upgrade()
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via passive sonar".format(target.detected_str()), \
-                        [entity])
+                    self.push_to_console_if_player("{} detected via passive sonar ({})".format(target.detected_str(), \
+                        target.xy_tuple), [entity])
                     new.append(new_contact)
         return new
+
+    def initial_sonar_acc(self, entity, target, result, active=False) -> int:
+        d = manhattan_distance(entity.xy_tuple, target.xy_tuple)
+        acc = CONTACT_ACC_ID_THRESHOLD
+        acc -= d * INITIAL_ACC_LOSS_PER_DISTANCE_UNIT
+        if target.submersible:
+            acc -= INITIAL_ACC_PENALTY_SUBMERSIBLE
+        if active:
+            acc += INITIAL_ACC_BONUS_ACTIVE
+        acc += abs(result) * INITIAL_ACC_BONUS_ROLL_FACTOR
+        acc += entity.alert_level.value * INITIAL_ACC_BONUS_ALERT_FACTOR
+        if target.speed_mode == "fast":
+            acc += INITIAL_ACC_BONUS_FAST_MODE
+        if acc < 0:
+            acc = 0
+        elif acc > CONTACT_ACC_ID_THRESHOLD:
+            acc = CONTACT_ACC_ID_THRESHOLD
+        return acc
 
     def sim_event_entity_conducts_radar_detection(self, entity, new_contacts_ls) -> list:
         if self.log_sim_events:
@@ -720,33 +886,32 @@ class Game:
                 new_contact = Contact(target, acc)
                 exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
                 exists_in_new_contacts = first(lambda x: x.entity is target, new)
-                if exists_in_old_contacts is not None and exists_in_old_contacts.acc < acc:
+                if exists_in_old_contacts is not None: 
                     exists_in_old_contacts.acc = acc
-                elif exists_in_new_contacts is not None and exists_in_new_contacts.acc < acc:
+                elif exists_in_new_contacts is not None: 
                     exists_in_new_contacts.acc = acc
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
-                    self.push_to_console_if_player("{} detected via radar".format(target.detected_str(), acc), \
-                        [entity])
+                    self.push_to_console_if_player("{} detected via radar ({})".format(target.detected_str(), \
+                        target.xy_tuple), [entity])
                     new.append(new_contact)
         return new
 
     def alert_check(self):
         for entity in self.entities:
-            if len(entity.contacts) > 0:
+            if len(entity.get_hostile_contacts()) > 0:
                 entity.raise_alert_level(AlertLevel.ALERTED)
             elif entity.alert_level == AlertLevel.ENGAGED:
                 entity.alert_level = AlertLevel.ALERTED
 
     def keyboard_event_changed_display(self) -> bool:
-        return not self.input_blocked() \
-            and (self.moved() \
+        return self.moved() \
             or self.toggled_mini_map() \
             or self.console_scrolled() \
             or self.cancel_target_mode() \
             or self.cycle_target() \
             or self.fire_at_target() \
             or self.toggled_hud() \
-            or self.used_ability())
+            or self.used_ability()
 
     def toggled_mini_map(self) -> bool:
         if pygame.key.get_pressed()[K_m]:
@@ -806,19 +971,22 @@ class Game:
         # NOTE: This covers attacks both from and against the player
         self.display_changed = True
         launcher.raise_alert_level(AlertLevel.ENGAGED)
-        launched = self.skill_check_launch_missile(self.player)
+        launched = self.skill_check_launch_missile(launcher)
         if launched <= 0:
-            # target detection:
-            if target.can_detect_incoming_missiles():
-                target_detects = self.skill_check_detect_nearby_missile(launcher, target, target)
-                if target_detects <= 0: 
-                    target.raise_alert_level(AlertLevel.ENGAGED)
-            # nearby observer detection:
-            for entity in list(filter(lambda x: x not in [target, launcher], self.entities)): 
+            # detection:
+            for entity in list(filter(lambda x: x.faction != launcher.faction, self.entities)): 
                 if entity.can_detect_incoming_missiles():
                     detected = self.skill_check_detect_nearby_missile(launcher, target, entity) 
                     if detected <= 0:
-                        entity.raise_alert_level(AlertLevel.ALERTED)
+                        if entity is target:
+                            entity.raise_alert_level(AlertLevel.ENGAGED)
+                        else:
+                            entity.raise_alert_level(AlertLevel.ALERTED)
+                        is_new_contact = launcher not in list(map(lambda x: x.entity, entity.contacts))
+                        if is_new_contact:
+                            new_contact = [Contact(launcher, 100)]
+                            self.sim_event_propagate_new_contacts(entity, new_contact)
+            # launch:
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + MISSILE_SPEED * distance
             target.missiles_incoming.append(LaunchedWeapon(eta, launcher, target, missile_range))
@@ -839,11 +1007,13 @@ class Game:
         launcher.raise_alert_level(AlertLevel.ENGAGED)
         launched = self.skill_check_launch_torpedo(launcher)
         if launched <= 0:
+            is_known = False
             # target detection:
             if target.can_detect_incoming_torpedos():
                 target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target)
                 if target_detects <= 0: 
                     target.raise_alert_level(AlertLevel.ENGAGED)
+                    is_known = True  
             # nearby observer detection:
             for entity in list(filter(lambda x: x not in [target, launcher], self.entities)): 
                 if entity.can_detect_incoming_torpedos():
@@ -852,7 +1022,7 @@ class Game:
                         entity.raise_alert_level(AlertLevel.ALERTED)
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + TORPEDO_SPEED * distance
-            target.torpedos_incoming.append(LaunchedWeapon(eta, launcher, target, torp_range))
+            target.torpedos_incoming.append(LaunchedWeapon(eta, launcher, target, torp_range, known=is_known))
             self.push_to_console_if_player("TORPEDO LAUNCHED! (eta: {})".format(eta), [launcher], \
                 tag="combat")
             torps = launcher.get_ability("torpedo")
@@ -870,9 +1040,14 @@ class Game:
             acc = ORPHANED_TORPEDO_DEFAULT
         else:
             acc = contact.acc
-        bonus = modifiers.pilot_torpedo_alert_mod(target.alert_level)
+        bonus = [modifiers.pilot_torpedo_alert_mod(target.alert_level)]
+        if target.speed_mode == "fast":
+            bonus.append(modifiers.fast_mode_torpedo_evasion_bonus)
+        penalty = []
+        if not torp.known:
+            penalty.append(modifiers.unknown_torpedo_evasion_penalty)
         acc_pen = -((100 - acc) // 10)
-        contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=[bonus])
+        contest = roll_skill_contest(launcher, target, "torpedo", "evasive maneuvers", mods_a=bonus, mods_b=penalty)
         result = contest["roll"]
         if contest["entity"] is launcher:
             result *= -1
@@ -927,20 +1102,17 @@ class Game:
     def sim_event_torpedo_arrival(self, torp): 
         if self.log_sim_events:
             print("sim_event_torpedo_arrival({})".format([torp.launcher.name, torp.target.name]))
-        # evasion and damage
+        # evasion, misses/technical failures, and damage
         launcher, target = torp.launcher, torp.target
-        target_detects = self.skill_check_detect_nearby_torpedo(launcher, target, target) 
-        successfully_evaded = False
-        if target_detects <= 0 and target.is_mobile():
-            target.raise_alert_level(AlertLevel.ENGAGED)
-            self.push_to_console_if_player("{} takes evasive action!".format(target.name), [launcher, target], \
-                tag="combat")
-            evaded = self.skill_check_evade_incoming_torpedo(torp)
-            if evaded <= 0: 
+        evaded = self.skill_check_evade_incoming_torpedo(torp)
+        if evaded <= 0:
+            if torp.known:
                 msg = "{}'s torpedo is evaded by {}!".format(launcher.name, target.name)
-                self.push_to_console_if_player(msg, [launcher, target], tag="combat")
-                successfully_evaded = True
-        if not successfully_evaded:
+            else:
+                msg = "{}'s torpedo miss vs. {}!".format(launcher.name, target.name)
+            self.push_to_console_if_player(msg, [launcher, target], tag="combat")
+        else:
+            target.raise_alert_level(AlertLevel.ENGAGED)
             dmg = roll_torpedo_damage()
             # TODO: (eventually a table of effects for damage rolls that are very high or low)
             target.change_hp(-dmg)
@@ -985,12 +1157,15 @@ class Game:
         return FAIL_DEFAULT
 
     def skill_check_detect_asonar_contact(self, observer, target) -> int:
-        mods = [
+        observer_mods = [
             modifiers.sonar_distance_mod(observer, target) // 2,
             observer.alert_level.value,
         ]
-        contest = roll_skill_contest(observer, target, "active sonar", "stealth", mods_a=mods, \
-            mods_b = [modifiers.stealth_asonar_penalty])
+        target_mods = [modifiers.stealth_asonar_penalty]
+        if target.speed_mode == "fast":
+            target_mods.append(modifiers.fast_mode_stealth_penalty)
+        contest = roll_skill_contest(observer, target, "active sonar", "stealth", mods_a=observer_mods, \
+            mods_b=target_mods)
         result, winner = contest["roll"], contest["entity"]
         # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
         #       on it alone.
@@ -1001,17 +1176,22 @@ class Game:
         return FAIL_DEFAULT
 
     def skill_check_detect_psonar_contact(self, observer, target) -> int:
-        mods = [
+        observer_mods = [
             modifiers.moving_psonar_mod(observer, target),
             observer.alert_level.value,
             modifiers.sonar_distance_mod(observer, target),
         ]
-        contest = roll_skill_contest(observer, target, "passive sonar", "stealth", mods_a=mods)
+        target_mods = []
+        if target.speed_mode == "fast":
+            target_mods.append(modifiers.fast_mode_stealth_penalty)
+        contest = roll_skill_contest(observer, target, "passive sonar", "stealth", mods_a=observer_mods, \
+            mods_b=target_mods)
         result, winner = contest["roll"], contest["entity"]
         # NOTE: under normal circumstances, this roll is hidden from the player so they can't count contacts based
         #       on it alone.
         #self.push_to_console_if_player("[{}] Skill Contest (passive sonar detection): {}".format(observer.name, \
         #    result), [observer], tag="rolls")
+        #self.push_to_console_if_player("a={} | b={}".format(observer_mods, target_mods), [observer], tag="rolls") ###
         if winner is observer and result <= 0:
             return result
         return FAIL_DEFAULT
@@ -1081,8 +1261,6 @@ class Game:
             if detected_sonar <= 0:
                 self.push_to_console_if_player("[{}] Skill Check (detect torpedo via sonar): {}".format(observer.name, \
                     self.skill_check_to_str(detected_sonar)), [observer], tag="rolls")
-                if target is self.player:
-                    self.push_to_console("Incoming torpedo!", tag="combat")
         if detected_visual or detected_sonar: 
             return min([detected_visual, detected_sonar])
         return FAIL_DEFAULT
@@ -1103,17 +1281,26 @@ class Game:
             self.camera = targets[self.targeting_index["current"]].xy_tuple
             self.display_changed = True
             return True
+        elif pygame.key.get_pressed()[K_TAB]:
+            self.observation_index = (self.observation_index + 1) % len(self.player.contacts)
+            self.camera = self.player.contacts[self.observation_index].entity.xy_tuple
+            self.display_changed = True
+            return True
         return False
 
     def reset_target_mode(self):
-        self.display_changed = True
         self.targeting_ability = None
-        self.camera = self.player.xy_tuple
         self.targeting_index = {"current": 0, "max": 0}
+        self.camera = self.player.xy_tuple
+        self.display_changed = True
 
     def cancel_target_mode(self):
-        if pygame.key.get_pressed()[K_ESCAPE] and self.targeting_ability:
-            self.reset_target_mode()
+        if pygame.key.get_pressed()[K_ESCAPE]:
+            if self.targeting_ability:
+                self.reset_target_mode()
+            self.camera = self.player.xy_tuple
+            self.displaying_mini_map = False
+            self.display_changed = True
             return True
         return False
 
@@ -1235,14 +1422,18 @@ class Game:
             entity.xy_tuple[0] + DIRECTIONS[direction][0], 
             entity.xy_tuple[1] + DIRECTIONS[direction][1]
         )
+        # despawn AI units moving off-map
         if not self.tilemap.tile_in_bounds(target_xy_tuple) and not entity.player:
-            # NOTE: AI units despawn when moving off-map
             if entity in self.entities:
                 self.entities.remove(entity)
-        occupied = first(lambda x: x.xy_tuple == target_xy_tuple and entity is not x, self.entities)
-        if occupied is not None and occupied not in list(map(lambda x: x.entity, entity.contacts)):
-            self.push_to_console_if_player("suspicious noises in this direction {}".format(occupied.name), [entity])  
+                self.tilemap.toggle_occupied(entity.xy_tuple)
+                self.player.contacts = list(filter(lambda x: x.entity is not entity, self.player.contacts))
+                return
+        # moving into occupied space
+        if direction != "wait" and self.tilemap.occupied(target_xy_tuple): 
+            self.push_to_console_if_player("suspicious noises in this direction", [entity])  
             direction = "wait"
+        # wait and long wait
         if direction == "wait":
             if entity.player and not self.player_long_wait and self.shift_pressed():
                 self.player_long_wait = True
@@ -1255,7 +1446,10 @@ class Game:
             if entity.player:
                 self.camera = self.player.xy_tuple
             return True
-        if self.entity_can_move(entity, direction):
+        # valid movement
+        elif self.entity_can_move(entity, direction):
+            self.tilemap.toggle_occupied(entity.xy_tuple)
+            self.tilemap.toggle_occupied(target_xy_tuple)
             entity.xy_tuple = target_xy_tuple
             if entity.player:
                 self.camera = self.player.xy_tuple
@@ -1285,7 +1479,11 @@ class Game:
 
     def turn_based_routines(self):
         if self.player_turn_ended or self.player_long_wait:
+            self.observation_index = 0
+            self.processing = True
+            self.map_distance_to_player = self.djikstra_map_distance_to_player()
             self.run_entity_behavior() 
+            self.incoming_torp_alert()
             self.sensor_checks()
             self.alert_check()
             self.torpedo_arrival_check() 
@@ -1293,10 +1491,11 @@ class Game:
             self.dead_entity_check()
             self.player_long_wait_check() 
             if not self.player_long_wait:
+                self.update_mini_map() 
                 self.player_turn_ended = False
+                self.processing = False
             if self.debug:
                 self.player_debug_mode_contacts()
-            self.update_mini_map() 
 
     def update(self):
         self.handle_events()
