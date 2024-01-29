@@ -91,8 +91,9 @@ class TileMap:
                 neighbors.append(self.get_tile(target_xy))
         return neighbors
 
-    def toggle_occupied(self, xy_tuple) -> bool:
-        self.tiles[xy_tuple[0]][xy_tuple[1]].occupied = not self.tiles[xy_tuple[0]][xy_tuple[1]].occupied
+    def toggle_occupied(self, xy_tuple):
+        if self.tile_in_bounds(xy_tuple):
+            self.tiles[xy_tuple[0]][xy_tuple[1]].occupied = not self.tiles[xy_tuple[0]][xy_tuple[1]].occupied
 
     def occupied(self, xy_tuple) -> bool:
         return self.tiles[xy_tuple[0]][xy_tuple[1]].occupied 

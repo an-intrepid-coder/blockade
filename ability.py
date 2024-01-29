@@ -15,6 +15,25 @@ class Ability:
         self.targets_other = False
         self.targets_self = False
         self.range = None
+        self.ammo = None
+
+    def change_ammo(self, amt): 
+        self.ammo = self.ammo + amt
+        if self.ammo < 0:
+            self.ammo = 0
+
+# NOTE: In the future, I may allow the player to control some surface vessels and use some of these
+#       AI-only abilities.
+
+class DropSonobuoy(Ability):
+    def __init__(self, ammo=DEFAULT_SONOBUOY_AMMO):
+        self.type = "drop sonobuoy"
+        self.ammo = ammo
+
+class LaunchHelicopter(Ability):
+    def __init__(self):  
+        self.type = "launch helicopter"
+        self.ammo = 1
 
 class ToggleSpeed(Ability):
     def __init__(self):  
@@ -27,11 +46,11 @@ class ToggleSpeed(Ability):
         return "{}: toggle speed".format(self.key_literal)
 
 class ShortRangeTorpedo(Ability):
-    def __init__(self):  
+    def __init__(self, ammo=DEFAULT_TORP_AMMO):  
         super().__init__()
         self.type = "torpedo"
-        self.ammo = 20 # NOTE: tentative
-        self.range = TORPEDO_RANGE # NOTE: tentative
+        self.ammo = ammo
+        self.range = TORPEDO_RANGE 
         self.targets_other = True
         self.key_literal = "1"
         self.key_constant = K_1
@@ -40,10 +59,10 @@ class ShortRangeTorpedo(Ability):
         return "{}: torpedo (x{})".format(self.key_literal, self.ammo)
 
 class ShortRangeMissile(Ability):
-    def __init__(self):
+    def __init__(self, ammo=DEFAULT_MISSILE_AMMO):
         super().__init__()
         self.type = "missile"
-        self.ammo = 8 # NOTE: tentative
+        self.ammo = ammo
         self.range = MISSILE_RANGE
         self.targets_other = True
         self.key_literal = "2"

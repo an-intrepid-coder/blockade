@@ -6,7 +6,6 @@ from ability import *
 from functional import first
 from enum import Enum
 from alert_level import AlertLevel, random_starting_alert_level
-from rolls import roll_for_initiative
 from euclidean import manhattan_distance
 import sort_keys
 from unit_tile import *
@@ -22,6 +21,9 @@ class Contact:
             self.acc = 0
         elif self.acc > 100:
             self.acc = 100
+
+    def copy(self):
+        return Contact(self.entity, self.acc)
 
 class LaunchedWeapon:
     def __init__(self, eta, launcher, target, wep_range, known=False):
@@ -44,6 +46,8 @@ class Entity:
         self.can_ocean_move = False
         self.can_air_move = False
         self.player = False
+        self.chaser = False
+        self.chasing = False
         self.alert_level = random_starting_alert_level()
         self.abilities = [] 
         self.skills = {
@@ -75,11 +79,14 @@ class Entity:
         self.last_direction = "wait"
         self.submersible = False
         self.direction = direction
-        self.saved_path = None
         self.identified = False
         # NOTE: For now, mission scope assumes all enemy entities are in a single "formation". But larger mission types
         #       in future versions will require assigning each unit to a specific formation w/ a specific task.
         self.formation = formation
+        self.torp_range_bonus = 0
+        self.missile_range_bonus = 0
+        self.standoff = None
+        self.mothership = None
 
     def dmg_str(self) -> str:
         if self.hp["current"] == self.hp["max"]:
@@ -249,6 +256,23 @@ class Freighter(Entity):
             ToggleSpeed(),
         ]
 
+class Sonobuoy(Entity):
+    def __init__(self, xy_tuple, faction, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
+        self.image = unit_tile_circle(faction_to_color[self.faction], hollow=True)
+        self.name = "sonobuoy" 
+        self.identified = True
+        self.can_ocean_move = True
+        # NOTE: tentative values below
+        self.skills["radio"] = 16
+        self.skills["stealth"] = 4
+        self.skills["passive sonar"] = 11 # tentative
+        self.hp = {"current": 4, "max": 4} 
+        self.speed = FAIL_DEFAULT
+        self.abilities = [
+            PassiveSonar(), 
+        ] 
+
 class SmallConvoyEscort(Entity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
@@ -274,4 +298,88 @@ class SmallConvoyEscort(Entity):
             ShortRangeTorpedo(),
             ActiveSonar(),
         ] 
+
+class PatrolPlane(Entity):
+    def __init__(self, xy_tuple, faction, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
+        self.image = unit_tile_cross(faction_to_color[self.faction])
+        self.name = "patrol plane" 
+        self.can_ocean_move = True
+        self.can_air_move = True
+        # NOTE: tentative values below
+        self.skills["visual detection"] = 16 
+        self.skills["radio"] = 16
+        self.skills["radar"] = 16
+        self.skills["torpedo"] = 14
+        self.hp = {"current": 6, "max": 6} 
+        self.speed = 10
+        self.abilities = [
+            Radar(), 
+            ToggleSpeed(),
+            ShortRangeTorpedo(),
+            DropSonobuoy(ammo=PATROL_PLANE_SONOBUOY_AMMO),
+        ] 
+        self.alert_level = AlertLevel.ALERTED
+        # NOTE: aircraft are always in fast mode
+        self.toggle_speed() 
+
+class PatrolHelicopter(Entity):
+    def __init__(self, xy_tuple, faction, mothership, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
+        self.image = unit_tile_cross(faction_to_color[self.faction])
+        self.name = "patrol helicopter" 
+        self.can_ocean_move = True
+        self.can_air_move = True
+        # NOTE: highly tentative values below
+        self.skills["visual detection"] = 16 
+        self.skills["radio"] = 15
+        self.skills["radar"] = 15
+        self.skills["torpedo"] = 14
+        self.hp = {"current": 4, "max": 4} 
+        self.speed = 12 
+        self.mothership = mothership
+        self.map_to_mothership = None
+        self.abilities = [
+            Radar(), 
+            ToggleSpeed(),
+            ShortRangeTorpedo(),
+            DropSonobuoy(),
+        ] 
+        self.chaser = True
+        self.alert_level = AlertLevel.ALERTED
+        # NOTE: aircraft are always in fast mode
+        self.toggle_speed() 
+        # NOTE: patrol helicopters begin with good copies of all mothership contacts
+        self.contacts = [contact.copy() for contact in mothership.contacts] 
+
+class HeavyConvoyEscort(Entity):
+    # NOTE: These are "boss fights", or even to be avoided entirely by the player
+    def __init__(self, xy_tuple, faction, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
+        self.image = unit_tile_triangle(faction_to_color[self.faction])
+        self.name = "heavy convoy escort" 
+        self.can_ocean_move = True
+        # NOTE: highly tentative values below
+        self.skills["visual detection"] = 12
+        self.skills["evasive maneuvers"] = 8
+        self.skills["radio"] = 14
+        self.skills["radar"] = 16
+        self.skills["stealth"] = 7
+        self.skills["point defense"] = 15
+        self.skills["passive sonar"] = 13
+        self.skills["torpedo"] = 15
+        self.skills["active sonar"] = 14
+        self.hp = {"current": 50, "max": 50} 
+        self.speed = 35
+        self.abilities = [
+            Radar(), 
+            PassiveSonar(), 
+            ToggleSpeed(),
+            ShortRangeTorpedo(ammo=HEAVY_ESCORT_TORP_AMMO),
+            ActiveSonar(),
+            LaunchHelicopter(),
+        ] 
+        self.torp_range_bonus = ROCKET_TORP_RANGE_BONUS
+        self.standoff = HEAVY_CONVOY_ESCORT_STANDOFF
+        self.last_xy = None
 

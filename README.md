@@ -1,6 +1,6 @@
 # BLOCKADE 
 
-[![Early Prototype Level](screenshots/000_3t.jpg)](screenshots/000_3.jpg)
+[![Early Prototype Level](screenshots/000_4t.jpg)](screenshots/000_4.jpg)
 
 **Status / Progress**: On the way to 0.0.0 (minimum viable prototype), and getting pretty close. Currently just a small sandbox level in which to attack a lightly defended convoy.
 

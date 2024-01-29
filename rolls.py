@@ -7,8 +7,6 @@ def roll3d6() -> list:
 
 # NOTE: Specific rolls may use more/less dice, or take
 #       modifiers, at some point.
-def roll_for_initiative() -> int:
-    return sum(roll3d6())
 
 def roll_torpedo_damage() -> int:
     return sum(roll3d6())

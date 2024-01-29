@@ -30,11 +30,11 @@ def pilot_torpedo_alert_mod(alert_level) -> int:
 def moving_psonar_mod(observer, target) -> int:
     mod = 0
     if observer.momentum == 0:
-        mod += 2
+        mod += 3
     elif observer.speed_mode == "fast":
         mod += -2
     if target.momentum == 0:
-        mod += -2
+        mod += -3
     elif target.speed_mode == "fast":
         mod += 2
     return mod

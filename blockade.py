@@ -39,11 +39,6 @@ class Game:
         self.targeting_index = {"current": 0, "max": 0}
         self.observation_index = 0
         self.sim_snapshots = [] 
-        self.player = None
-        self.generate_encounter_convoy_attack(freighters=True, \
-            escorts=True, \
-            subs=True, \
-            neutral_freighters=True) # NOTE: in progress
         self.time_units_passed = 0
         self.player_turn = 0
         self.player_turn_ended = False
@@ -55,10 +50,81 @@ class Game:
         self.player_long_wait = False
         self.mini_map = None 
         self.displaying_mini_map = False 
+        self.player = None
+        self.offmap_asw_eta = None 
+        scale = randint(1, 2) # **
+        if scale > 1: 
+            self.push_to_console("BRIEF: Large convoy!") # **
+        else:
+            self.push_to_console("BRIEF: Small convoy!") # **
+        subs = randint(1, 3) == 1 # **
+        heavy_escort = randint(1, 6) == 1 # **
+        if heavy_escort: 
+            self.push_to_console("BRIEF: Expect heavy escort ship!") # **
+        offmap_asw = randint(1, 4) == 1 # **
+        if offmap_asw: 
+            self.push_to_console("BRIEF: Within ASW air coverage!") # **
+        neutral_freighters = randint(1, 3) == 1 # **
+        if neutral_freighters: 
+            self.push_to_console("BRIEF: Within busy shipping lane!") # **
+        self.generate_encounter_convoy_attack( \
+            scale=scale, \
+            freighters=True, \
+            escorts=True, \
+            subs=subs, \
+            heavy_escort=heavy_escort, \
+            offmap_asw=offmap_asw, \
+            neutral_freighters=neutral_freighters) 
+        # ** NOTE: When campaign mode implemented soon, these will be part of mission selection, and their chances will
+        #          be contextual. Current setup for playing in the sandbox and testing mechanics.
         if self.debug:
             self.player.hp = {"current": 2000, "max": 2000}  
         self.update_mini_map()
-        self.map_distance_to_player = self.djikstra_map_distance_to_player()
+        self.map_distance_to_player = self.djikstra_map_distance_to(self.player.xy_tuple)
+        self.player_last_known_xy = None
+        self.map_distance_to_player_last_known = None
+        self.player_in_enemy_contacts = False
+        self.map_enemy_sonar_overlay = self.djikstra_map_enemy_sonar()
+
+    def chase_check(self): 
+        def chasers_by_distance(units) -> list:
+            chasers = []
+            for entity in units:
+                if entity.chaser:
+                    d = manhattan_distance(entity.xy_tuple, self.player_last_known_xy)
+                    item = [d, entity.id, entity]
+                    heapq.heappush(chasers, item)
+            return chasers 
+        def currently_chasing(chasers) -> bool:
+            for item in chasers:
+                entity = item[2]
+                if entity.chasing:
+                    return True
+            return False
+        def closest_chaser(chasers) -> Entity:
+            for chaser in chasers:
+                if chaser[2].name == "patrol helicopter":
+                    return chaser[2] 
+            return chasers[0][2]
+        player_recently_seen = self.player_in_enemy_contacts
+        self.player_in_enemy_contacts = False
+        enemy_units = list(filter(lambda x: x.faction == "enemy", self.entities))
+        enemy_unit_contacts = list(map(lambda x: x.contacts, enemy_units))
+        for contact_list in enemy_unit_contacts:
+            if self.player in list(map(lambda x: x.entity, contact_list)):
+                self.player_in_enemy_contacts = True
+                self.map_distance_to_player_last_known = self.djikstra_map_distance_to(self.player.xy_tuple)
+                self.player_last_known_xy = self.player.xy_tuple
+                chaser = first(lambda x: x.chasing, self.entities)
+                if chaser is not None:
+                    chaser.chasing = False
+                break
+        if player_recently_seen and not self.player_in_enemy_contacts:
+            # start chase
+            chasers = chasers_by_distance(enemy_units)
+            if len(chasers) > 0 and not currently_chasing(chasers):
+                new_chaser = closest_chaser(chasers)
+                new_chaser.chasing = True
 
     def incoming_torp_alert(self):
         incoming = 0
@@ -69,10 +135,34 @@ class Game:
         if incoming > 0:
             self.push_to_console("{} NEW INCOMING TORPEDOS(s)!".format(incoming), tag="combat")
 
-    def djikstra_map_distance_to_player(self):
+    def djikstra_map_enemy_sonar(self) -> list:
+        def valid_tiles_in_range_of(xy_tuple, d) -> list:
+            locs = []
+            for x in range(xy_tuple[0] - d, xy_tuple[0] + d + 1):
+                for y in range(xy_tuple[1] - d, xy_tuple[1] + d + 1):
+                    valid = self.tilemap.tile_in_bounds((x, y)) and manhattan_distance((x, y), xy_tuple) <= d
+                    if valid:
+                        locs.append((x, y))
+            return locs 
+        djikstra_map = [[0 for y in range(self.tilemap.wh_tuple[1])] for x in range(self.tilemap.wh_tuple[0])]
+        player_contact_entities = list(map(lambda x: x.entity, self.player.contacts))
+        # NOTE: For now, all enemy units have the same sonar range. 
+        enemy_psonar_origins = list(map(lambda x: x.xy_tuple, \
+            list(filter(lambda x: x.faction == "enemy" \
+            and x in player_contact_entities \
+            and x.identified \
+            and x.has_ability("passive sonar") \
+            and x.has_skill("passive sonar"), self.entities))))
+        for origin in enemy_psonar_origins:
+            hits = valid_tiles_in_range_of(origin, PASSIVE_SONAR_RANGE)
+            for xy_tuple in hits:
+                djikstra_map[xy_tuple[0]][xy_tuple[1]] += 1
+        return djikstra_map 
+
+    def djikstra_map_distance_to(self, xy_tuple) -> list: 
         valid_tile_types = ["ocean"] # TODO: land units and land tiles
         def fitness_function(tile):
-            score = manhattan_distance(tile.xy_tuple, self.player.xy_tuple)
+            score = manhattan_distance(tile.xy_tuple, xy_tuple)
             terrain_is_valid = tile.tile_type in valid_tile_types
             if not terrain_is_valid: 
                 score = INVALID_DJIKSTRA_SCORE
@@ -119,7 +209,7 @@ class Game:
                 self.player.next_move_time = self.time_units_passed 
 
     # Gets the shortest available route 
-    def shortest_entity_path(self, start_loc, end_loc) -> list:  
+    def shortest_entity_path(self, start_loc, end_loc, djikstra_map) -> list:  
         tiles_searched = 0
         traceback_start, traceback_end = None, None
         if self.pathfinding_perf:
@@ -191,7 +281,7 @@ class Game:
         visited = []
         seen_bools = [[False for y in range(self.tilemap.wh_tuple[1])] for x in range(self.tilemap.wh_tuple[0])] 
         seen_count = 1
-        start_score = self.map_distance_to_player[start_loc[0]][start_loc[1]]
+        start_score = djikstra_map[start_loc[0]][start_loc[1]]
         seen_bools[start_loc[0]][start_loc[1]] = True
         start_node = [start_score, 0, {"loc": start_loc, "via": None}]
         heapq.heappush(seen, start_node)
@@ -204,7 +294,7 @@ class Game:
                 seen_count += 1
                 heapq.heappush(seen, node)
                 tiles_searched += 1
-                score = self.map_distance_to_player[tile.xy_tuple[0]][tile.xy_tuple[1]]
+                score = djikstra_map[tile.xy_tuple[0]][tile.xy_tuple[1]]
                 if tile.occupied:
                     score = INVALID_DJIKSTRA_SCORE 
                 new_node = {"loc": tile.xy_tuple, "via": node[2]["loc"]}
@@ -234,8 +324,10 @@ class Game:
             freighters=False, \
             escorts=False, \
             subs=False, \
+            heavy_escort=False, \
+            offmap_asw=False, \
             neutral_freighters=False): 
-        self.tilemap = TileMap((200, 200), "open ocean")
+        self.tilemap = TileMap(MAP_SIZE, "open ocean")
         num_freighters, num_escorts, num_subs, num_neutral_freighters = 0, 0, 0, 0
         # NOTE: When campaign sim is in place, the number and type of ships available will depend on campaign
         #       progress, and some RNG. All current ship numbers highly tentative.
@@ -249,7 +341,7 @@ class Game:
         # NOTE: neutral freighters don't influence enemy spawning fuzz, nor is their population determined by scale.
         if neutral_freighters:
             num_neutral_freighters += randint(1, 10)
-        fuzz_val = sum([num_escorts, num_freighters, num_subs]) + 1
+        fuzz_val = sum([num_escorts, num_freighters, num_subs]) + ENEMY_SPAWN_FUZZ_BASE
         traveling = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
         origin = (self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2)
         def fuzzed_spawn(origin, spawn_ls, entity, fuzz):
@@ -293,6 +385,24 @@ class Game:
             fuzzed_spawn(origin, units, Freighter(origin, "enemy", direction=traveling), fuzz_val)
         for _ in range(num_subs):
             fuzzed_spawn(origin, units, EscortSub(origin, "enemy", direction=traveling), fuzz_val)
+        # NOTE: Heavy Escorts are rare and not affected by scale pop
+        if heavy_escort:
+            fuzzed_spawn(origin, units, HeavyConvoyEscort(origin, "enemy", direction=traveling), fuzz_val)
+        # chasers
+        if escorts:
+            num_escort_chasers = scale * SMALL_CONVOY_ESCORT_CHASERS_PER_SCALE
+            escort_chasers = list(filter(lambda x: x.name == "small convoy escort", units))[:num_escort_chasers]
+            for escort in escort_chasers:
+                escort.chaser = True
+        if subs:
+            num_sub_chasers = randint(ESCORT_SUB_CHASERS[0], ESCORT_SUB_CHASERS[1])
+            sub_chasers = list(filter(lambda x: x.name == "escort sub", units))[:num_sub_chasers]
+            for sub in sub_chasers:
+                sub.chaser = True
+        # offmap asw planes
+        if offmap_asw:
+            self.offmap_asw_eta = randint(OFFMAP_ASW_ETA_RANGE[0], OFFMAP_ASW_ETA_RANGE[1]) 
+        # player
         spawn_player(units) 
         for _ in range(num_neutral_freighters):
             direction = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
@@ -314,6 +424,12 @@ class Game:
                     tile = self.tilemap.get_tile((x, y))
                     if tile.tile_type == "ocean":
                         pygame.draw.rect(self.screen, "navy", rect)
+                        sonar_layers = self.map_enemy_sonar_overlay[x][y]
+                        if sonar_layers > 0:
+                            for layer in range(sonar_layers):
+                                surf = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
+                                surf.fill(ENEMY_SONAR_OVERLAY_COLOR)
+                                self.screen.blit(surf, (rect[0], rect[1]))
                     elif tile.tile_type == "land":
                         pygame.draw.rect(self.screen, "olive", rect)
                 else:
@@ -324,9 +440,9 @@ class Game:
             count_x += 1
             count_y = 0
 
-        def draw_overlay(radius, color): 
-            tiles_in_range = list(filter(lambda x: manhattan_distance(x.xy_tuple, self.player.xy_tuple) <= radius \
-                and x.xy_tuple != self.player.xy_tuple and str(x.xy_tuple) in relative_positions.keys(), \
+        def draw_overlay(origin, radius, color): 
+            tiles_in_range = list(filter(lambda x: manhattan_distance(x.xy_tuple, origin) <= radius \
+                and x.xy_tuple != origin and str(x.xy_tuple) in relative_positions.keys(), \
                 self.tilemap.all_tiles()))
             # filter out land tiles and inaccessible tiles if torpedo attack (TODO)
             if self.targeting_ability is not None:
@@ -340,17 +456,17 @@ class Game:
                     surf.fill(color)
                     self.screen.blit(surf, (cell[0], cell[1]))
 
-        # overlays 
+        # player overlays 
         if self.targeting_ability is not None:
-            draw_overlay(self.targeting_ability.range, HUD_OPAQUE_RED)
+            draw_overlay(self.player.xy_tuple, self.targeting_ability.range, HUD_OPAQUE_RED)
         else:
             # NOTE: These sensor overlays may overlap
             if self.overlay_sonar: 
                 psonar_range = first(lambda x: x.type == "passive sonar", self.player.abilities).range
-                draw_overlay(psonar_range, SONAR_OVERLAY_COLOR)
+                draw_overlay(self.player.xy_tuple, psonar_range, SONAR_OVERLAY_COLOR)
             if self.overlay_radar:
                 radar_range = first(lambda x: x.type == "radar", self.player.abilities).range
-                draw_overlay(radar_range, RADAR_OVERLAY_COLOR)
+                draw_overlay(self.player.xy_tuple, radar_range, RADAR_OVERLAY_COLOR)
 
         # draw entities:
         for entity in self.entities:
@@ -392,7 +508,7 @@ class Game:
                 if entity.xy_tuple == self.camera and not entity.player:
                     target_cell = relative_positions[str(self.camera)]
                     target = (target_cell[0] + CELL_SIZE // 2, target_cell[1] + CELL_SIZE // 2)
-                    pygame.draw.circle(self.screen, "magenta", target, int(CELL_SIZE * .66), 2)
+                    pygame.draw.circle(self.screen, "cyan", target, int(CELL_SIZE * .66), 2)
 
     def get_tail_point(self, entity, center) -> tuple:
         if entity.last_direction == "wait":
@@ -463,7 +579,7 @@ class Game:
 
     def draw_mini_map(self):
         x = self.screen.get_width() // 2 - self.mini_map.get_width() // 2
-        y = self.screen.get_height() // 2 - self.mini_map.get_height() // 2
+        y = 26  
         self.screen.blit(self.mini_map, (x, y)) 
 
     def draw_player_stats(self):
@@ -473,7 +589,7 @@ class Game:
             "Time: {}".format(self.time_units_passed),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
             "Inc. Torps: {}".format(len(self.player.known_torpedos())), 
-            "Location: {}".format(self.player.xy_tuple),
+            "Loc: {}".format(self.player.xy_tuple),
             "Camera: {}".format(self.camera),
             "Speed: {} ({})".format(self.player.speed_mode, self.player.get_adjusted_speed()),
             "Momentum: {}".format(self.player.momentum),
@@ -503,6 +619,7 @@ class Game:
                 "HP: {}".format(target.dmg_str()),
                 "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
                 "Detection: {}%".format(contact.acc),
+                "Loc: {}".format(contact.entity.xy_tuple),
             ]
             text = self.hud_font.render("  |  ".join(target_stats), True, "white")
             surf = pygame.Surface((text.get_width() + 1, text.get_height() + 1), flags=SRCALPHA)
@@ -551,7 +668,7 @@ class Game:
             self.running = False 
             print("...you died...") 
     
-    def run_entity_behavior(self): # NOTE: in progress
+    def run_entity_behavior(self): 
         while True: 
             can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed, self.entities))
             player_turn = any(map(lambda x: x.player, can_move))
@@ -566,6 +683,12 @@ class Game:
                         self.entity_ai_freighter(entity)
                     elif entity.name == "escort sub":
                         self.entity_ai_escort_sub(entity)
+                    elif entity.name == "heavy convoy escort":
+                        self.entity_ai_heavy_convoy_escort(entity) 
+                    elif entity.name == "patrol helicopter":
+                        self.entity_ai_patrol_helicopter(entity) 
+                    elif entity.name == "patrol plane":
+                        self.entity_ai_patrol_plane(entity)
             self.time_units_passed += 1 
 
     # Moves an entity in a completely random direction
@@ -575,8 +698,10 @@ class Game:
         direction = choice(list(DIRECTIONS.keys())) 
         self.move_entity(entity, direction)
 
-    def relative_direction(self, from_xy, to_xy): # TODO: put direction-related stuff in own file
+    def relative_direction(self, from_xy, to_xy, opposite=False): # TODO: put direction-related stuff in own file
         diff = (to_xy[0] - from_xy[0], to_xy[1] - from_xy[1])
+        if opposite:
+            diff = tuple(map(lambda x: x * -1, diff))
         for k, v in DIRECTIONS.items():
             if v == diff:
                 return k
@@ -606,24 +731,109 @@ class Game:
                 used_asonar = True
         return used_asonar
 
-    def entity_ai_shoot_at_or_close_with_target(self, entity) -> bool:
+    def entity_ai_shoot_at_or_close_with_target(self, entity, standoff=None) -> bool:
         if self.log_ai_routines:
             print("entity_ai_shoot_at_or_close_with_target()")
-        torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= TORPEDO_RANGE, \
+        trange = TORPEDO_RANGE + entity.torp_range_bonus
+        torpedo_target = first(lambda x: manhattan_distance(x.entity.xy_tuple, entity.xy_tuple) <= trange, \
             entity.get_hostile_contacts())
         if torpedo_target is not None and entity.get_ability("torpedo").ammo > 0:
-            self.sim_event_torpedo_launch(entity, torpedo_target.entity, TORPEDO_RANGE)
+            self.sim_event_torpedo_launch(entity, torpedo_target.entity, trange)
             return True
-        elif len(entity.get_hostile_contacts()) > 0:
+        elif len(entity.get_hostile_contacts()) > 0: 
             closest = entity.get_closest_contact(hostile_only=True) 
-            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple) 
+            distance = manhattan_distance(closest.entity.xy_tuple, entity.xy_tuple)
+            path = self.shortest_entity_path(entity.xy_tuple, closest.entity.xy_tuple, self.map_distance_to_player) 
             if path is not None:
-                direction = self.relative_direction(entity.xy_tuple, path[0]) 
+                if standoff is not None and distance < entity.standoff:
+                    direction = self.relative_direction(entity.xy_tuple, path[0], opposite=True)
+                else:
+                    direction = self.relative_direction(entity.xy_tuple, path[0])
                 self.move_entity(entity, direction)
             else: 
                 self.entity_ai_random_move(entity)
             return True
+        elif entity.chasing:
+            path = self.shortest_entity_path(entity.xy_tuple, self.player_last_known_xy, \
+                self.map_distance_to_player_last_known) 
+            if path is not None:
+                direction = self.relative_direction(entity.xy_tuple, path[0])
+                self.move_entity(entity, direction)
+            else:
+                self.entity_ai_random_move(entity)
+            if chebyshev_distance(entity.xy_tuple, self.player_last_known_xy) <= 1:
+                entity.chasing = False
+            return True
         return False
+
+    def entity_ai_patrol_helicopter(self, entity):
+        if self.log_ai_routines:
+            print("entity_ai_patrol_helicopter()")
+        engaged = self.entity_ai_shoot_at_or_close_with_target(entity)
+        no_target = not entity.chasing and len(entity.get_hostile_contacts()) == 0
+        out_of_ammo = entity.get_ability("torpedo").ammo <= 0
+        if (no_target or out_of_ammo) and not engaged:
+            # return path
+            path = self.shortest_entity_path(entity.xy_tuple, entity.mothership.xy_tuple, entity.map_to_mothership) 
+            if path is not None:
+                direction = self.relative_direction(entity.xy_tuple, path[0])
+                self.move_entity(entity, direction)
+        # landing
+        can_land = chebyshev_distance(entity.xy_tuple, entity.mothership.xy_tuple) <= 1
+        if can_land and not engaged and no_target:
+            self.entities.remove(entity)
+            player_contact = first(lambda x: x.entity is entity, self.player.contacts)
+            if player_contact is not None:
+                self.player.contacts.remove(player_contact)
+            entity.mothership.get_ability("launch helicopter").change_ammo(1)
+        self.entity_ai_drop_sonobuoy(entity)
+
+    def entity_ai_patrol_plane(self, entity): 
+        if self.log_ai_routines:
+            print("entity_ai_patrol_plane()")
+        if not self.entity_ai_shoot_at_or_close_with_target(entity):
+            self.entity_ai_attempt_to_follow_course(entity)
+        self.entity_ai_drop_sonobuoy(entity)
+
+    def entity_ai_drop_sonobuoy(self, entity):
+        if self.log_ai_routines:
+            print("entity_ai_drop_sonobuoy()")
+        if entity.get_ability("drop sonobuoy").ammo > 0:
+            existing_buoys = list(filter(lambda x: x.name == "sonobuoy", self.entities))
+            good_spot = all(map(lambda x: manhattan_distance(x.xy_tuple, entity.xy_tuple) > SONOBUOY_DIFFUSION_RANGE, \
+                existing_buoys))
+            free_tiles = list(filter(lambda x: not x.occupied, self.tilemap.neighbors_of(entity.xy_tuple)))
+            will_drop = sum(roll3d6()) <= DROP_SONOBUOY_TARGET
+            if len(free_tiles) > 0 and good_spot and will_drop:
+                launch_tile = choice(free_tiles).xy_tuple
+                sonobuoy = Sonobuoy(launch_tile, "enemy")
+                self.entities.append(sonobuoy)
+                self.tilemap.toggle_occupied(launch_tile)
+                entity.get_ability("drop sonobuoy").change_ammo(-1)
+
+    def entity_ai_heavy_convoy_escort(self, entity): 
+        if self.log_ai_routines:
+            print("entity_ai_heavy_convoy_escort()")
+        entity.hit_the_gas_if_in_danger()
+        heli = entity.get_ability("launch helicopter")
+        free_tiles = list(filter(lambda x: not x.occupied, self.tilemap.neighbors_of(entity.xy_tuple)))
+        if heli.ammo > 0 and len(free_tiles) > 0 and len(entity.get_hostile_contacts()) > 0:
+            launch_tile = choice(free_tiles).xy_tuple
+            self.tilemap.toggle_occupied(launch_tile)
+            launched_heli = PatrolHelicopter(launch_tile, "enemy", entity)
+            launched_heli.map_to_mothership = self.djikstra_map_distance_to(entity.xy_tuple)
+            self.entities.append(launched_heli)
+            heli.change_ammo(-1)
+        if self.entity_ai_active_sonar_use(entity):
+            return
+        elif self.entity_ai_shoot_at_or_close_with_target(entity, standoff=True):
+            return
+        self.entity_ai_attempt_to_follow_course(entity)
+        if entity.last_xy != entity.xy_tuple:
+            launched_heli = first(lambda x: x.name == "patrol helicopter" and x.mothership is entity, self.entities)
+            if launched_heli is not None:
+                launched_heli.map_to_mothership = self.djikstra_map_distance_to(entity.xy_tuple)
+        entity.last_xy = entity.xy_tuple
 
     def entity_ai_small_convoy_escort(self, entity): 
         if self.log_ai_routines:
@@ -801,6 +1011,7 @@ class Game:
         new = []
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= ACTIVE_SONAR_RANGE \
+            and not x.can_air_move \
             and x is not entity, self.entities))
         for target in potentials:
             detected = self.skill_check_detect_asonar_contact(entity, target) 
@@ -832,6 +1043,7 @@ class Game:
         new = list(new_contacts_ls)
         potentials = list(filter(lambda x: x.faction != entity.faction \
             and manhattan_distance(x.xy_tuple, entity.xy_tuple) <= PASSIVE_SONAR_RANGE \
+            and not x.can_air_move \
             and x is not entity, self.entities))
         for target in potentials:
             detected = self.skill_check_detect_psonar_contact(entity, target)
@@ -992,7 +1204,7 @@ class Game:
             target.missiles_incoming.append(LaunchedWeapon(eta, launcher, target, missile_range))
             self.push_to_console_if_player("MISSILE LAUNCHED! (eta: {})".format(eta), [launcher], \
                 tag="combat")
-            self.targeting_ability.ammo -= 1
+            self.targeting_ability.change_ammo(-1)
         else:
             self.push_to_console_if_player("missile fails to launch!", [launcher], tag="combat")
         # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
@@ -1026,7 +1238,7 @@ class Game:
             self.push_to_console_if_player("TORPEDO LAUNCHED! (eta: {})".format(eta), [launcher], \
                 tag="combat")
             torps = launcher.get_ability("torpedo")
-            torps.ammo -= 1
+            torps.change_ammo(-1)
         else:
             self.push_to_console_if_player("torpedo fails to launch!", [launcher], tag="combat")
         # NOTE: a good or bad roll has a significant effect on the time cost of both successful and failed launches
@@ -1087,7 +1299,7 @@ class Game:
                 self.push_to_console_if_player("{}'s missile intercepted!".format(launcher.name), [launcher, target], \
                     tag="combat")
                 intercepted = True
-        if not intercepted:
+        if not intercepted and not target.dead:
             dmg = roll_missile_damage()
             # TODO: (eventually a table of effects for damage rolls that are very high or low)
             target.change_hp(-dmg)
@@ -1111,7 +1323,7 @@ class Game:
             else:
                 msg = "{}'s torpedo miss vs. {}!".format(launcher.name, target.name)
             self.push_to_console_if_player(msg, [launcher, target], tag="combat")
-        else:
+        elif not target.dead:
             target.raise_alert_level(AlertLevel.ENGAGED)
             dmg = roll_torpedo_damage()
             # TODO: (eventually a table of effects for damage rolls that are very high or low)
@@ -1191,7 +1403,6 @@ class Game:
         #       on it alone.
         #self.push_to_console_if_player("[{}] Skill Contest (passive sonar detection): {}".format(observer.name, \
         #    result), [observer], tag="rolls")
-        #self.push_to_console_if_player("a={} | b={}".format(observer_mods, target_mods), [observer], tag="rolls") ###
         if winner is observer and result <= 0:
             return result
         return FAIL_DEFAULT
@@ -1281,7 +1492,7 @@ class Game:
             self.camera = targets[self.targeting_index["current"]].xy_tuple
             self.display_changed = True
             return True
-        elif pygame.key.get_pressed()[K_TAB]:
+        elif pygame.key.get_pressed()[K_TAB] and len(self.player.contacts) > 0: 
             self.observation_index = (self.observation_index + 1) % len(self.player.contacts)
             self.camera = self.player.contacts[self.observation_index].entity.xy_tuple
             self.display_changed = True
@@ -1428,6 +1639,8 @@ class Game:
                 self.entities.remove(entity)
                 self.tilemap.toggle_occupied(entity.xy_tuple)
                 self.player.contacts = list(filter(lambda x: x.entity is not entity, self.player.contacts))
+                if entity.name == "patrol plane":
+                    self.offmap_asw_eta = OFFMAP_ASW_CLEAR 
                 return
         # moving into occupied space
         if direction != "wait" and self.tilemap.occupied(target_xy_tuple): 
@@ -1477,11 +1690,44 @@ class Game:
     def player_debug_mode_contacts(self):
         self.player.contacts = list(map(lambda x: Contact(x, 100), filter(lambda x: not x.player, self.entities)))
 
+    def offmap_asw_check(self):  
+        def fuzz(axis) -> int:
+            if axis == "vertical":
+                offset = self.tilemap.wh_tuple[1] // 3
+            elif axis == "horizontal":
+                offset = self.tilemap.wh_tuple[0] // 3
+            return randint(-offset, offset)
+        on_map = first(lambda x: x.name == "patrol plane", self.entities) is not None
+        if not on_map and self.offmap_asw_eta == OFFMAP_ASW_CLEAR:
+            self.offmap_asw_eta = self.time_units_passed + randint(OFFMAP_ASW_ETA_RANGE[0], OFFMAP_ASW_ETA_RANGE[1])
+        elif not on_map \
+            and self.offmap_asw_eta is not None \
+            and self.offmap_asw_eta > 0 \
+            and self.time_units_passed >= self.offmap_asw_eta:
+            traveling = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
+            x, y = self.tilemap.wh_tuple[0] // 2, self.tilemap.wh_tuple[1] // 2
+            if "up" in traveling:
+                y = self.tilemap.wh_tuple[1] - 1
+                x += fuzz("horizontal")
+            if "down" in traveling:
+                y = 0
+                x += fuzz("horizontal")
+            if "left" in traveling:
+                x = self.tilemap.wh_tuple[0] - 1
+                y += fuzz("vertical")
+            if "right" in traveling:
+                x = 0
+                y += fuzz("vertical")
+            plane = PatrolPlane((x, y), "enemy", traveling)
+            self.entities.append(plane)
+
     def turn_based_routines(self):
         if self.player_turn_ended or self.player_long_wait:
             self.observation_index = 0
             self.processing = True
-            self.map_distance_to_player = self.djikstra_map_distance_to_player()
+            self.offmap_asw_check() 
+            self.map_distance_to_player = self.djikstra_map_distance_to(self.player.xy_tuple)
+            self.chase_check() 
             self.run_entity_behavior() 
             self.incoming_torp_alert()
             self.sensor_checks()
@@ -1489,6 +1735,7 @@ class Game:
             self.torpedo_arrival_check() 
             self.missile_arrival_check() 
             self.dead_entity_check()
+            self.map_enemy_sonar_overlay = self.djikstra_map_enemy_sonar() 
             self.player_long_wait_check() 
             if not self.player_long_wait:
                 self.update_mini_map() 
