@@ -56,7 +56,6 @@ class Game:
         self.player = None
         self.offmap_asw_eta = None 
         self.mission = ConvoyAttack() 
-        self.briefing_splash = self.generate_briefing_splash(self.mission) 
         self.generate_encounter_convoy_attack(self.mission)
         if self.debug:
             self.player.hp = {"current": 2000, "max": 2000}  
@@ -68,13 +67,20 @@ class Game:
         self.map_enemy_sonar_overlay = self.djikstra_map_enemy_sonar()
         self.displaying_briefing_splash = True
         self.displaying_big_splash = False
+        self.hud_swapped = False
+        self.briefing_splash = self.generate_big_splash_txt_surf(self.mission.briefing_lines) 
+        self.mission_over = False
+        self.mission_over_confirm = False
+        self.mission_over_splash = None
+        self.campaign_mode = False
+        self.exit_game_confirm = False
 
-    def generate_briefing_splash(self, mission) -> pygame.Surface:
+    def generate_big_splash_txt_surf(self, lines) -> pygame.Surface:
         surf = pygame.Surface(BIG_SPLASH_SIZE)
         line_height = HUD_FONT_SIZE + 1
         width = surf.get_width()
-        for line in range(len(mission.briefing_lines)):
-            txt = mission.briefing_lines[line]
+        for line in range(len(lines)):
+            txt = lines[line]
             line_surface = self.hud_font.render(txt, True, "white")
             x = width // 2 - line_surface.get_width() // 2
             surf.blit(line_surface, (x, line * line_height))
@@ -546,7 +552,10 @@ class Game:
         for line in range(len(msgs)):
             line_surface = self.hud_font.render(msgs[line], True, "white")
             console_surface.blit(line_surface, (0, line * line_height))
-        y = self.screen.get_height() - line_height * num_lines - 3
+        if self.hud_swapped:
+            y = HUD_Y_EGDE_PADDING
+        else:
+            y = self.screen.get_height() - line_height * num_lines - 3
         if tag == "rolls":
             x = 0
         elif tag == "combat":
@@ -568,7 +577,11 @@ class Game:
             y = line_height * count_y
             abilities_surface.blit(text, (x, y)) 
             count_y += 1
-        self.screen.blit(abilities_surface, (0, 0)) 
+        if self.hud_swapped:
+            y = self.screen.get_height() - abilities_surface.get_height() - HUD_Y_EGDE_PADDING
+        else:
+            y = HUD_Y_EGDE_PADDING
+        self.screen.blit(abilities_surface, (0, y)) 
 
     def draw_player_stats(self):
         line_height = HUD_FONT_SIZE + 1
@@ -576,6 +589,7 @@ class Game:
             "Turn: {}".format(self.player_turn),
             "Time: {}".format(self.time_units_passed),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
+            "Hunted: {}".format(self.player_being_hunted()),
             "Inc. Torps: {}".format(len(self.player.known_torpedos())), 
             "Loc: {}".format(self.player.xy_tuple),
             "Camera: {}".format(self.camera),
@@ -594,28 +608,37 @@ class Game:
             y = line_height * count_y
             stats_surface.blit(text, (x, y))
             count_y += 1
-        pos = (self.screen.get_width() - stats_width, 0)
+        if self.hud_swapped:
+            y = self.screen.get_height() - stats_surface.get_height() - HUD_Y_EGDE_PADDING
+        else:
+            y = HUD_Y_EGDE_PADDING
+        pos = (self.screen.get_width() - stats_width, y)
         self.screen.blit(stats_surface, pos)
 
     def draw_target_stats(self):
         target = first(lambda x: not x.player and x.xy_tuple == self.camera, self.entities)
         if target is not None:
             contact = first(lambda x: x.entity is target, self.player.contacts)
-            target_stats = [
-                "Target Name: {}".format(target.detected_str()),
-                "Distance: {}".format(manhattan_distance(self.player.xy_tuple, target.xy_tuple)),
-                "HP: {}".format(target.dmg_str()),
-                "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
-                "Detection: {}%".format(contact.acc),
-                "Loc: {}".format(contact.entity.xy_tuple),
-            ]
-            text = self.hud_font.render("  |  ".join(target_stats), True, "white")
-            surf = pygame.Surface((text.get_width() + 1, text.get_height() + 1), flags=SRCALPHA)
-            surf.fill(HUD_OPAQUE_BLACK)
-            pygame.draw.rect(surf, "cyan", (0, 0, surf.get_width(), surf.get_height()), 1)
-            surf.blit(text, (1, 1))
-            pos = (self.screen.get_width() / 2 - surf.get_width() / 2, 4)
-            self.screen.blit(surf, pos)
+            if contact is not None:
+                target_stats = [
+                    "Target Name: {}".format(target.detected_str()),
+                    "Distance: {}".format(manhattan_distance(self.player.xy_tuple, target.xy_tuple)),
+                    "HP: {}".format(target.dmg_str()),
+                    "Speed: {} ({})".format(target.speed_mode, target.get_adjusted_speed()),
+                    "Detection: {}%".format(contact.acc),
+                    "Loc: {}".format(contact.entity.xy_tuple),
+                ]
+                text = self.hud_font.render("  |  ".join(target_stats), True, "white")
+                surf = pygame.Surface((text.get_width() + 1, text.get_height() + 1), flags=SRCALPHA)
+                surf.fill(HUD_OPAQUE_BLACK)
+                pygame.draw.rect(surf, "cyan", (0, 0, surf.get_width(), surf.get_height()), 1)
+                surf.blit(text, (1, 1))
+                if self.hud_swapped:
+                    y = self.screen.get_height() - surf.get_height() - HUD_Y_EGDE_PADDING
+                else:
+                    y = HUD_Y_EGDE_PADDING
+                pos = (self.screen.get_width() / 2 - surf.get_width() / 2, y)
+                self.screen.blit(surf, pos)
 
     def draw_hud(self):
         if self.displaying_hud:
@@ -629,6 +652,8 @@ class Game:
             self.draw_big_splash(self.mini_map)
         if self.displaying_briefing_splash:
             self.draw_big_splash(self.briefing_splash)
+        elif self.mission_over_splash is not None:
+            self.draw_big_splash(self.mission_over_splash)
 
     def draw_big_splash(self, surf):
         x = self.screen.get_width() // 2 - surf.get_width() // 2
@@ -663,10 +688,21 @@ class Game:
             self.display_changed = True
             for entity in dead_entities:
                 self.tilemap.toggle_occupied(entity.xy_tuple)
+                if entity.name == "freighter":
+                    if entity.faction == "neutral":
+                        self.mission.neutral_freighters_sunk += 1
+                    else:
+                        self.mission.freighters_sunk += 1
+                elif entity.name == "small convoy escort":
+                    self.mission.escorts_sunk += 1
+                elif entity.name == "escort sub":
+                    self.mission.subs_sunk += 1
+                elif entity.name == "heavy convoy escort":
+                    self.mission.heavy_escorts_sunk += 1
         if self.player not in self.entities:
-            # NOTE: place-holder for a splash screen and stats, etc.
-            self.running = False 
-            print("...you died...") 
+            self.mission_over = True 
+            self.display_changed = True
+            self.mission_over_check() 
     
     def run_entity_behavior(self): 
         while True: 
@@ -1123,15 +1159,54 @@ class Game:
                 entity.alert_level = AlertLevel.ALERTED
 
     def keyboard_event_changed_display(self) -> bool:
-        return self.moved() \
-            or self.toggled_mini_map() \
-            or self.toggled_briefing() \
-            or self.console_scrolled() \
-            or self.cancel_target_mode() \
-            or self.cycle_target() \
-            or self.fire_at_target() \
-            or self.toggled_hud() \
-            or self.used_ability()
+        if self.mission_over_splash is None and not self.campaign_mode:
+            return self.moved() \
+                or self.swapped_hud() \
+                or self.toggled_mini_map() \
+                or self.toggled_briefing() \
+                or self.console_scrolled() \
+                or self.escape_pressed() \
+                or self.cycle_target() \
+                or self.fire_at_target() \
+                or self.toggled_hud() \
+                or self.used_ability() \
+                or self.ended_mission() \
+                or self.exited_game() 
+        elif self.mission_over_splash is not None and not self.campaign_mode:
+            return self.ended_mission_mode()
+
+    def exited_game(self) -> bool:
+        if pygame.key.get_pressed()[K_q] and self.ctrl_pressed():
+            if self.exit_game_confirm: 
+                self.running = False
+            else:
+                self.exit_game_confirm = True
+                self.push_to_console("Exit game? Press again to confirm.")
+            return True
+        return False
+
+    def player_being_hunted(self) -> bool:
+        chasing = first(lambda x: x.chasing, self.entities) is not None
+        return chasing or self.player_in_enemy_contacts
+
+    def ended_mission(self) -> bool:
+        if pygame.key.get_pressed()[K_e] and self.ctrl_pressed():
+            can_end_mission = not self.player_being_hunted()
+            if self.mission_over_confirm and can_end_mission:
+                self.mission_over = True
+            elif can_end_mission:
+                self.mission_over_confirm = True
+                self.push_to_console("End mission? Press again to confirm.")
+            elif not can_end_mission:
+                self.push_to_console("Can't end mission while being hunted!")
+            return True
+        return False
+
+    def swapped_hud(self) -> bool:
+        if pygame.key.get_pressed()[K_w] and self.ctrl_pressed():
+            self.hud_swapped = not self.hud_swapped
+            return True
+        return False
 
     def toggled_mini_map(self) -> bool:
         if pygame.key.get_pressed()[K_m]:
@@ -1319,6 +1394,8 @@ class Game:
             target.change_hp(-dmg)
             if target.dead:
                 dmg_msg = "{} destroyed by missile!".format(target.name)
+                if target.player:
+                    self.mission.player_fate = "Destroyed by {}'s missile!".format(launcher.name)
             else:
                 dmg_msg = "{} takes {} damage from a missile! ({} / {})".format(target.name, dmg, \
                     target.hp["current"], target.hp["max"])
@@ -1344,6 +1421,8 @@ class Game:
             target.change_hp(-dmg)
             if target.dead:
                 dmg_msg = "{} destroyed by torpedo!".format(target.name, dmg)
+                if target.player:
+                    self.mission.player_fate = "Destroyed by {}'s torpedo!".format(launcher.name)
             else:
                 dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
                     target.hp["current"], target.hp["max"])
@@ -1519,7 +1598,13 @@ class Game:
         self.camera = self.player.xy_tuple
         self.display_changed = True
 
-    def cancel_target_mode(self):
+    def ended_mission_mode(self) -> bool:
+        if pygame.key.get_pressed()[K_ESCAPE]:
+            self.running = False
+            return True
+        return False
+
+    def escape_pressed(self):
         if pygame.key.get_pressed()[K_ESCAPE]:
             if self.targeting_ability:
                 self.reset_target_mode()
@@ -1737,9 +1822,16 @@ class Game:
             plane = PatrolPlane((x, y), "enemy", traveling)
             self.entities.append(plane)
 
+    def stealth_check(self):
+        if self.mission.stealth_retained and self.player_in_enemy_contacts:
+            self.mission.stealth_retained = False
+
     def turn_based_routines(self):
+        self.mission_over_check() 
         if self.player_turn_ended or self.player_long_wait:
             self.observation_index = 0
+            self.mission_over_confirm = False
+            self.exit_game_confirm = False
             self.processing = True
             self.offmap_asw_check() 
             self.map_distance_to_player = self.djikstra_map_distance_to(self.player.xy_tuple)
@@ -1753,12 +1845,23 @@ class Game:
             self.dead_entity_check()
             self.map_enemy_sonar_overlay = self.djikstra_map_enemy_sonar() 
             self.player_long_wait_check() 
+            self.stealth_check()  
             if not self.player_long_wait:
                 self.update_mini_map() 
                 self.player_turn_ended = False
                 self.processing = False
             if self.debug:
                 self.player_debug_mode_contacts()
+
+    def mission_over_check(self):
+        if self.mission_over:
+            if self.player in self.entities:
+                hp = self.player.hp["current"]
+            else:
+                hp = 0
+            score_lines = self.mission.assessment_lines(hp)
+            splash_lines = ["___MISSION COMPLETE___", ""] + score_lines + ["", "<ESC to continue>"]
+            self.mission_over_splash = self.generate_big_splash_txt_surf(splash_lines) 
 
     def update(self):
         self.handle_events()

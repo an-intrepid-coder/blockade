@@ -7,7 +7,6 @@ ability_types = [
     "radar", 
     "passive sonar",
     "active sonar", 
-    "intel report", # TODO
 ] 
 
 class Ability:

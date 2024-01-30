@@ -206,7 +206,7 @@ class PlayerSub(Entity):
         self.skills["evasive maneuvers"] = 14  
         self.skills["periscope"] = 14
         self.skills["radio"] = 15
-        self.hp = {"current": 20, "max": 20}  
+        self.hp = {"current": PLAYER_HP, "max": PLAYER_HP}  
         self.alert_level = AlertLevel.PREPARED
         self.speed = 30
         self.submersible = True
@@ -342,7 +342,7 @@ class PatrolHelicopter(Entity):
         self.abilities = [
             Radar(), 
             ToggleSpeed(),
-            ShortRangeTorpedo(),
+            ShortRangeTorpedo(ammo=PATROL_HELICOPTER_TORP_AMMO),
             DropSonobuoy(),
         ] 
         self.chaser = True
@@ -365,11 +365,11 @@ class HeavyConvoyEscort(Entity):
         self.skills["radio"] = 14
         self.skills["radar"] = 16
         self.skills["stealth"] = 7
-        self.skills["point defense"] = 15
+        self.skills["point defense"] = 12
         self.skills["passive sonar"] = 13
         self.skills["torpedo"] = 15
         self.skills["active sonar"] = 14
-        self.hp = {"current": 50, "max": 50} 
+        self.hp = {"current": 30, "max": 30} 
         self.speed = 35
         self.abilities = [
             Radar(), 
