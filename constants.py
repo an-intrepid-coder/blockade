@@ -53,7 +53,7 @@ DEFAULT_TORP_AMMO = 20
 DEFAULT_MISSILE_AMMO = 8
 PATROL_PLANE_SONOBUOY_AMMO = 30 # tentative
 
-SONOBUOY_DIFFUSION_RANGE = PASSIVE_SONAR_RANGE // 2
+SONOBUOY_DIFFUSION_RANGE = PASSIVE_SONAR_RANGE - 3
 DEFAULT_SONOBUOY_AMMO = 10 # tentative
 DROP_SONOBUOY_TARGET = 8 # tentative
 
@@ -70,6 +70,8 @@ FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansatio
 WINDOW_ICON_PATH = path.abspath(path.join(path.dirname(__file__), "./window_icon.png"))
 
 FPS = 60
+
+MAX_SONOBUOYS = 32 
 
 HUD_FONT_SIZE = 15
 
@@ -110,7 +112,9 @@ KEY_TO_DIRECTION = {
 HUD_OPAQUE_BLACK = (0, 0, 0, 120)
 HUD_OPAQUE_RED = (255, 0, 0, 120)
 SONAR_OVERLAY_COLOR = (0, 220, 220, 90)
-ENEMY_SONAR_OVERLAY_COLOR = (229, 189, 26, 80)
+ENEMY_SONAR_OVERLAY_COLOR = [229, 189, 26]
+ENEMY_SONAR_OVERLAY_ALPHA_BASE = 80
+ENEMY_SONAR_OVERLAY_ALPHA_INC = 20
 RADAR_OVERLAY_COLOR = (220, 220, 220, 90)
 ALPHA_KEY = (249, 249, 249)
 
@@ -121,5 +125,6 @@ faction_to_color = {"allied": "cyan", "neutral": "green", "enemy": "red"}
 
 MAP_SIZE = (300, 300)
 MINI_MAP_SIZE = (640, 640)  
+BIG_SPLASH_SIZE = (640, 640)  
 MM_CELL_SIZE = 4 
 

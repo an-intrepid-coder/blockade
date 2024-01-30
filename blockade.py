@@ -13,6 +13,7 @@ from random import choice, randint, shuffle, randrange
 from unit_tile import *
 import time
 import heapq
+from mission import *
 
 class SimStateSnapshot:
     pass # TODO
@@ -29,6 +30,8 @@ class Game:
         self.tilemap = None
         self.camera = (0, 0) 
         self.entities = []
+        self.sonobuoy_count = 0
+        self.sonobuoys = []
         self.console = Console()
         self.displaying_hud = True 
         self.console_scrolled_up_by = 0 
@@ -52,31 +55,9 @@ class Game:
         self.displaying_mini_map = False 
         self.player = None
         self.offmap_asw_eta = None 
-        scale = randint(1, 2) # **
-        if scale > 1: 
-            self.push_to_console("BRIEF: Large convoy!") # **
-        else:
-            self.push_to_console("BRIEF: Small convoy!") # **
-        subs = randint(1, 3) == 1 # **
-        heavy_escort = randint(1, 6) == 1 # **
-        if heavy_escort: 
-            self.push_to_console("BRIEF: Expect heavy escort ship!") # **
-        offmap_asw = randint(1, 4) == 1 # **
-        if offmap_asw: 
-            self.push_to_console("BRIEF: Within ASW air coverage!") # **
-        neutral_freighters = randint(1, 3) == 1 # **
-        if neutral_freighters: 
-            self.push_to_console("BRIEF: Within busy shipping lane!") # **
-        self.generate_encounter_convoy_attack( \
-            scale=scale, \
-            freighters=True, \
-            escorts=True, \
-            subs=subs, \
-            heavy_escort=heavy_escort, \
-            offmap_asw=offmap_asw, \
-            neutral_freighters=neutral_freighters) 
-        # ** NOTE: When campaign mode implemented soon, these will be part of mission selection, and their chances will
-        #          be contextual. Current setup for playing in the sandbox and testing mechanics.
+        self.mission = ConvoyAttack() 
+        self.briefing_splash = self.generate_briefing_splash(self.mission) 
+        self.generate_encounter_convoy_attack(self.mission)
         if self.debug:
             self.player.hp = {"current": 2000, "max": 2000}  
         self.update_mini_map()
@@ -85,6 +66,20 @@ class Game:
         self.map_distance_to_player_last_known = None
         self.player_in_enemy_contacts = False
         self.map_enemy_sonar_overlay = self.djikstra_map_enemy_sonar()
+        self.displaying_briefing_splash = True
+        self.displaying_big_splash = False
+
+    def generate_briefing_splash(self, mission) -> pygame.Surface:
+        surf = pygame.Surface(BIG_SPLASH_SIZE)
+        line_height = HUD_FONT_SIZE + 1
+        width = surf.get_width()
+        for line in range(len(mission.briefing_lines)):
+            txt = mission.briefing_lines[line]
+            line_surface = self.hud_font.render(txt, True, "white")
+            x = width // 2 - line_surface.get_width() // 2
+            surf.blit(line_surface, (x, line * line_height))
+        pygame.draw.rect(surf, "green", (0, 0, BIG_SPLASH_SIZE[0], BIG_SPLASH_SIZE[1]), 1)
+        return surf
 
     def chase_check(self): 
         def chasers_by_distance(units) -> list:
@@ -319,18 +314,16 @@ class Game:
         # NOTE: later will also block for some pop-up animations and stuff!
         return self.processing
 
-    def generate_encounter_convoy_attack(self, \
-            scale=1, \
-            freighters=False, \
-            escorts=False, \
-            subs=False, \
-            heavy_escort=False, \
-            offmap_asw=False, \
-            neutral_freighters=False): 
+    def generate_encounter_convoy_attack(self, mission):
+        scale = mission.scale
+        freighters = mission.freighters
+        escorts = mission.escorts
+        subs = mission.subs
+        heavy_escort = mission.heavy_escort
+        offmap_asw = mission.offmap_asw
+        neutral_freighters = mission.neutral_freighters
         self.tilemap = TileMap(MAP_SIZE, "open ocean")
         num_freighters, num_escorts, num_subs, num_neutral_freighters = 0, 0, 0, 0
-        # NOTE: When campaign sim is in place, the number and type of ships available will depend on campaign
-        #       progress, and some RNG. All current ship numbers highly tentative.
         for pop in range(scale):
             if escorts:
                 num_escorts += randint(SMALL_CONVOY_ESCORTS_PER_SCALE[0], SMALL_CONVOY_ESCORTS_PER_SCALE[1])
@@ -426,10 +419,10 @@ class Game:
                         pygame.draw.rect(self.screen, "navy", rect)
                         sonar_layers = self.map_enemy_sonar_overlay[x][y]
                         if sonar_layers > 0:
-                            for layer in range(sonar_layers):
-                                surf = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
-                                surf.fill(ENEMY_SONAR_OVERLAY_COLOR)
-                                self.screen.blit(surf, (rect[0], rect[1]))
+                            alpha = ENEMY_SONAR_OVERLAY_ALPHA_BASE + ENEMY_SONAR_OVERLAY_ALPHA_INC * sonar_layers
+                            surf = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
+                            surf.fill(ENEMY_SONAR_OVERLAY_COLOR + [alpha])
+                            self.screen.blit(surf, (rect[0], rect[1]))
                     elif tile.tile_type == "land":
                         pygame.draw.rect(self.screen, "olive", rect)
                 else:
@@ -577,11 +570,6 @@ class Game:
             count_y += 1
         self.screen.blit(abilities_surface, (0, 0)) 
 
-    def draw_mini_map(self):
-        x = self.screen.get_width() // 2 - self.mini_map.get_width() // 2
-        y = 26  
-        self.screen.blit(self.mini_map, (x, y)) 
-
     def draw_player_stats(self):
         line_height = HUD_FONT_SIZE + 1
         stats_lines = [
@@ -638,7 +626,16 @@ class Game:
             self.draw_player_stats() 
             self.draw_target_stats() 
         if self.displaying_mini_map and self.mini_map is not None:
-            self.draw_mini_map() 
+            self.draw_big_splash(self.mini_map)
+        if self.displaying_briefing_splash:
+            self.draw_big_splash(self.briefing_splash)
+
+    def draw_big_splash(self, surf):
+        x = self.screen.get_width() // 2 - surf.get_width() // 2
+        y = 26  
+        self.screen.blit(surf, (x, y)) 
+        self.display_changed = True
+        self.displaying_big_splash = True
 
     def draw(self):
         self.screen.fill("black")
@@ -652,17 +649,20 @@ class Game:
             # quit game:
             if event.type == QUIT:
                 self.running = False
-            # Keyboard Buttons (this game will be all buttons, as I want to prepare it for controller input)
+            # Keyboard Buttons
             elif event.type == KEYDOWN and not self.input_blocked(): 
                 self.display_changed = self.keyboard_event_changed_display()
         pygame.event.pump() 
 
     def dead_entity_check(self):
         new_entities = list(filter(lambda x: not x.dead, self.entities))
+        dead_entities = list(filter(lambda x: x.dead, self.entities))
         if len(new_entities) < len(self.entities):
             self.entities = new_entities
             self.player.contacts = list(filter(lambda x: x.entity in new_entities, self.player.contacts)) 
             self.display_changed = True
+            for entity in dead_entities:
+                self.tilemap.toggle_occupied(entity.xy_tuple)
         if self.player not in self.entities:
             # NOTE: place-holder for a splash screen and stats, etc.
             self.running = False 
@@ -807,6 +807,13 @@ class Game:
             if len(free_tiles) > 0 and good_spot and will_drop:
                 launch_tile = choice(free_tiles).xy_tuple
                 sonobuoy = Sonobuoy(launch_tile, "enemy")
+                item = [self.sonobuoy_count, sonobuoy]
+                self.sonobuoy_count += 1
+                heapq.heappush(self.sonobuoys, item)
+                if len(self.sonobuoys) > MAX_SONOBUOYS:
+                    buoy = heapq.heappop(self.sonobuoys)[1]
+                    if buoy in self.entities:
+                        self.entities.remove(buoy)
                 self.entities.append(sonobuoy)
                 self.tilemap.toggle_occupied(launch_tile)
                 entity.get_ability("drop sonobuoy").change_ammo(-1)
@@ -954,7 +961,7 @@ class Game:
                         # NOTE: I may include some acc degradation based on margin of success later on
                         known = first(lambda x: x.entity is contact.entity, target.contacts)
                         if known is not None: 
-                            known.acc += roll_for_acc_upgrade()
+                            known.change_acc(roll_for_acc_upgrade())
                         elif known is None:
                             target.contacts.append(contact)
 
@@ -1021,9 +1028,9 @@ class Game:
                 exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
                 exists_in_new_contacts = first(lambda x: x.entity is target, new)
                 if exists_in_old_contacts is not None:
-                    exists_in_old_contacts.acc += roll_for_acc_upgrade()
+                    exists_in_old_contacts.change_acc(roll_for_acc_upgrade())
                 elif exists_in_new_contacts is not None:
-                    exists_in_new_contacts.acc += roll_for_acc_upgrade()
+                    exists_in_new_contacts.change_acc(roll_for_acc_upgrade())
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
                     self.push_to_console_if_player("{} detected via active sonar ({})".format(target.detected_str(), \
                         target.xy_tuple), [entity])
@@ -1053,9 +1060,9 @@ class Game:
                 exists_in_old_contacts = first(lambda x: x.entity is target, entity.contacts)
                 exists_in_new_contacts = first(lambda x: x.entity is target, new)
                 if exists_in_old_contacts is not None: 
-                    exists_in_old_contacts.acc += roll_for_acc_upgrade()
+                    exists_in_old_contacts.change_acc(roll_for_acc_upgrade())
                 elif exists_in_new_contacts is not None: 
-                    exists_in_new_contacts.acc += roll_for_acc_upgrade()
+                    exists_in_new_contacts.change_acc(roll_for_acc_upgrade())
                 elif exists_in_new_contacts is None and exists_in_old_contacts is None:
                     self.push_to_console_if_player("{} detected via passive sonar ({})".format(target.detected_str(), \
                         target.xy_tuple), [entity])
@@ -1118,6 +1125,7 @@ class Game:
     def keyboard_event_changed_display(self) -> bool:
         return self.moved() \
             or self.toggled_mini_map() \
+            or self.toggled_briefing() \
             or self.console_scrolled() \
             or self.cancel_target_mode() \
             or self.cycle_target() \
@@ -1128,6 +1136,12 @@ class Game:
     def toggled_mini_map(self) -> bool:
         if pygame.key.get_pressed()[K_m]:
             self.displaying_mini_map = not self.displaying_mini_map
+            return True
+        return False
+
+    def toggled_briefing(self) -> bool:
+        if pygame.key.get_pressed()[K_r]:
+            self.displaying_briefing_splash = not self.displaying_briefing_splash
             return True
         return False
 
@@ -1512,6 +1526,8 @@ class Game:
             self.camera = self.player.xy_tuple
             self.displaying_mini_map = False
             self.display_changed = True
+            self.displaying_big_splash = False
+            self.displaying_briefing_splash = False
             return True
         return False
 
