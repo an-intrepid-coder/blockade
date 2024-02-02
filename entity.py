@@ -34,18 +34,71 @@ class LaunchedWeapon:
         self.gui_alert = False
         self.known = known
 
-class Entity: 
+class Entity:
     entities = 0
-    def __init__(self, xy_tuple, faction, direction=None, formation=None): 
+    def __init__(self, xy_tuple, faction):
+        self.xy_tuple = tuple(xy_tuple)
+        self.faction = faction
         self.id = Entity.entities
         Entity.entities += 1
-        self.faction = faction
-        self.xy_tuple = tuple(xy_tuple)
         self.image = None
         self.can_land_move = False
         self.can_ocean_move = False
         self.can_air_move = False
         self.player = False
+        self.hp = None
+        self.dead = False  
+        self.next_move_time = 0 
+        self.speed = None
+        self.speed_mode = "normal"
+        self.momentum = 0
+        self.last_direction = "wait"
+
+    def is_mobile(self):
+        # NOTE: this is used in the torpedo detection/evasion logic, so it should also account for things like
+        #   damaged engines/screws once those are in as some kind of modifier or status effect.
+        return self.can_land_move or self.can_ocean_move or self.can_air_move
+
+    def get_adjusted_speed(self): 
+        momentum_factor = self.momentum * MOMENTUM_FACTOR
+        return max(int(self.speed - (self.speed * momentum_factor)), 0)
+
+    def toggle_speed(self):
+        if self.speed_mode == "normal":
+            self.speed_mode = "fast"
+        elif self.speed_mode == "fast":
+            self.speed_mode = "normal"
+
+    def change_hp(self, change):
+        hp = self.hp["current"] + change
+        if hp < 0: hp = 0
+        elif hp > self.hp["max"]: hp = self.hp["max"]
+        self.hp["current"] = hp
+        if hp == 0:
+            self.dead = True
+
+class CampaignEntity(Entity):
+    def __init__(self, xy_tuple, faction, hidden=False):
+        super().__init__(xy_tuple, faction)
+        self.hidden = hidden
+    # TODO: maybe more here
+
+class PlayerCampaignEntity(CampaignEntity):
+    def __init__(self, xy_tuple, debug):
+        super().__init__(xy_tuple, "allied")
+        self.name = "PLAYER" # NOTE: temporary value
+        self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
+        self.can_ocean_move = True
+        self.player = True
+        if debug:
+            self.hp = {"current": 2000, "max": 2000}  
+        else:
+            self.hp = {"current": PLAYER_HP, "max": PLAYER_HP}  
+        self.speed = 30
+
+class TacticalEntity(Entity): 
+    def __init__(self, xy_tuple, faction, direction=None, formation=None): 
+        super().__init__(xy_tuple, faction)
         self.chaser = False
         self.chasing = False
         self.alert_level = random_starting_alert_level()
@@ -67,18 +120,11 @@ class Entity:
             # NOTE: there will be more kinds of point defense, and an Ability or two which use it, down the road.
             "point defense": None,
         }
-        self.hp = None
-        self.dead = False  
         self.contacts = [] 
-        self.next_move_time = 0 
-        self.speed = None
-        self.speed_mode = "normal"
         self.torpedos_incoming = []
         self.missiles_incoming = []
-        self.momentum = 0
-        self.last_direction = "wait"
         self.submersible = False
-        self.direction = direction
+        self.direction = direction # TODO: refactor this to something like "naive_travel_direction"
         self.identified = False
         # NOTE: For now, mission scope assumes all enemy entities are in a single "formation". But larger mission types
         #       in future versions will require assigning each unit to a specific formation w/ a specific task.
@@ -135,30 +181,12 @@ class Entity:
     def get_hostile_contacts(self):
         return list(filter(lambda x: x.entity.faction != self.faction and x.entity.faction != "neutral", self.contacts))
 
-    def get_adjusted_speed(self): 
-        momentum_factor = self.momentum * MOMENTUM_FACTOR
-        return max(int(self.speed - (self.speed * momentum_factor)), 0)
-
-    def toggle_speed(self):
-        if self.speed_mode == "normal":
-            self.speed_mode = "fast"
-        elif self.speed_mode == "fast":
-            self.speed_mode = "normal"
-
     def can_detect_incoming_torpedos(self):
         return self.has_skill("visual detection") or \
             (self.has_skill("passive sonar") and self.has_ability("passive sonar"))
 
     def can_detect_incoming_missiles(self):
         return self.has_skill("visual detection") or (self.has_skill("radar") and self.has_ability("radar"))
-
-    def change_hp(self, change):
-        hp = self.hp["current"] + change
-        if hp < 0: hp = 0
-        elif hp > self.hp["max"]: hp = self.hp["max"]
-        self.hp["current"] = hp
-        if hp == 0:
-            self.dead = True
 
     def has_ability(self, ability_type):
         return first(lambda x: x.type == ability_type, self.abilities) is not None
@@ -176,17 +204,12 @@ class Entity:
         if self.alert_level.value < alert_level.value:
             self.alert_level = alert_level
 
-    def is_mobile(self):
-        # NOTE: this is used in the torpedo detection/evasion logic, so it should also account for things like
-        #   damaged engines/screws once those are in as some kind of modifier or status effect.
-        return self.can_land_move or self.can_ocean_move or self.can_air_move
-
-class PlayerSub(Entity):
-    def __init__(self, xy_tuple): 
+class PlayerSub(TacticalEntity):
+    def __init__(self, xy_tuple, campaign_entity): 
         super().__init__(xy_tuple, "allied")
         self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
-        self.name = "PLAYER" # NOTE: temporary value
         self.can_ocean_move = True
+        self.name = campaign_entity.name
         self.player = True
         self.abilities = [
             ShortRangeTorpedo(), 
@@ -206,13 +229,13 @@ class PlayerSub(Entity):
         self.skills["evasive maneuvers"] = 14  
         self.skills["periscope"] = 14
         self.skills["radio"] = 15
-        self.hp = {"current": PLAYER_HP, "max": PLAYER_HP}  
+        self.hp = campaign_entity.hp
         self.alert_level = AlertLevel.PREPARED
-        self.speed = 30
+        self.speed = campaign_entity.speed
         self.submersible = True
         self.abilities.sort(key=sort_keys.abilities)
 
-class EscortSub(Entity):
+class EscortSub(TacticalEntity):
     # NOTE: This represents a relatively weak submarine the player might encounter guarding convoys
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
@@ -237,7 +260,7 @@ class EscortSub(Entity):
         self.speed = 35
         self.submersible = True
 
-class Freighter(Entity):
+class Freighter(TacticalEntity):
     # NOTE: This represents a totally unarmed freighter, and not a Q-ship or anything like that. But I will include
     #       such things later.
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
@@ -256,7 +279,7 @@ class Freighter(Entity):
             ToggleSpeed(),
         ]
 
-class Sonobuoy(Entity):
+class Sonobuoy(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_circle(faction_to_color[self.faction], hollow=True)
@@ -273,7 +296,7 @@ class Sonobuoy(Entity):
             PassiveSonar(), 
         ] 
 
-class SmallConvoyEscort(Entity):
+class SmallConvoyEscort(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction])
@@ -299,7 +322,7 @@ class SmallConvoyEscort(Entity):
             ActiveSonar(),
         ] 
 
-class PatrolPlane(Entity):
+class PatrolPlane(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_cross(faction_to_color[self.faction])
@@ -323,7 +346,7 @@ class PatrolPlane(Entity):
         # NOTE: aircraft are always in fast mode
         self.toggle_speed() 
 
-class PatrolHelicopter(Entity):
+class PatrolHelicopter(TacticalEntity):
     def __init__(self, xy_tuple, faction, mothership, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_cross(faction_to_color[self.faction])
@@ -352,7 +375,7 @@ class PatrolHelicopter(Entity):
         # NOTE: patrol helicopters begin with good copies of all mothership contacts
         self.contacts = [contact.copy() for contact in mothership.contacts] 
 
-class HeavyConvoyEscort(Entity):
+class HeavyConvoyEscort(TacticalEntity):
     # NOTE: These are "boss fights", or even to be avoided entirely by the player
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
