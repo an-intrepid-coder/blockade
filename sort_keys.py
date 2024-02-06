@@ -1,3 +1,5 @@
+from euclidean import *
+
 def tud(entity):
     return entity.time_unit_deficit
 

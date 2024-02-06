@@ -1,9 +1,43 @@
 from functional import *
-from euclidean import chebyshev_distance
+from euclidean import *
 from constants import *
 from random import choice, randint, randrange, shuffle
+import heapq
 
 tile_types = ["ocean", "land", "mountain", "river", "city", "forest"] 
+
+def sorted_by_distance_to(xy_tuple, tiles_ls, distance_fn):
+    sorted_ls = []
+    entry_count = 0
+    for tile in tiles_ls:
+        d = distance_fn(xy_tuple, tile.xy_tuple)
+        item = [d, entry_count, tile]
+        heapq.heappush(sorted_ls, item)
+        entry_count += 1
+    return sorted_ls 
+
+def is_edge(wh_tuple, xy_tuple) -> bool:
+    x, y = xy_tuple
+    w, h = wh_tuple
+    return x == w - 1 or y == h - 1 or x == 0 or y == 0
+
+def in_bounds(xy_tuple, wh_tuple) -> bool:
+    x, y = xy_tuple
+    w, h = wh_tuple
+    return x >= 0 and y >= 0 and x < h and y < w
+
+def valid_tiles_in_range_of(tiles_ls, xy_tuple, d, manhattan=False) -> list: 
+    w, h = len(tiles_ls[0]), len(tiles_ls)
+    locs = []
+    for x in range(xy_tuple[0] - d, xy_tuple[0] + d + 1):
+        for y in range(xy_tuple[1] - d, xy_tuple[1] + d + 1):
+            if manhattan:
+                valid = in_bounds((x, y), (w, h)) and manhattan_distance((x, y), xy_tuple) <= d
+            else:
+                valid = in_bounds((x, y), (w, h)) and chebyshev_distance((x, y), xy_tuple) <= d
+            if valid:
+                locs.append(tiles_ls[x][y])
+    return locs 
 
 class Tile:
     def __init__(self, xy_tuple, tile_type):
@@ -17,98 +51,100 @@ class Tile:
         self.exclusion_zone = False
         self.faction = None
         self.untakeable_city = False
-        self.distance_from_mainland = 0 # TODO
-        self.island_number = 0 # TODO
+        self.sea_route_node = False
+        self.logistical_sea_route = False
+        self.active_front = False
 
 geography_types = ["campaign", "open ocean", "coastline", "bay", "peninsula", "archipelago", "inland sea"]
 
 # Generates a very small but very specific map in a variety of possible orientations, with each tile
 # representing many more miles^2 than on the tactical maps.
-def gen_campaign_map(wh_tuple) -> tuple:  
-    elbow = choice(["upright", "upleft", "downright", "downleft"]) # <- rename this to "orientation" TODO
-    if elbow == "upright":
-        opposite = (wh_tuple[0] - 1, 0)
-    elif elbow == "upleft":
+def gen_campaign_map(wh_tuple) -> tuple: 
+    w, h = wh_tuple
+    orientation = choice(["upright", "upleft", "downright", "downleft"]) 
+    if orientation == "upright":
+        opposite = (w - 1, 0)
+    elif orientation == "upleft":
         opposite = (0, 0)
-    elif elbow == "downright":
-        opposite = (wh_tuple[0] - 1, wh_tuple[1] - 1)
-    elif elbow == "downleft":
-        opposite = (0, wh_tuple[1] - 1)
+    elif orientation == "downright":
+        opposite = (w - 1, h - 1)
+    elif orientation == "downleft":
+        opposite = (0, h - 1)
     tiles = []
-    def in_bounds(xy_tuple) -> bool:
-        return xy_tuple[0] >= 0 and xy_tuple[1] >= 0 and xy_tuple[0] < wh_tuple[0] and xy_tuple[1] < wh_tuple[1]
+    mainland_coastal_city_tiles = []
+    island_coastal_city_tiles = []
     def neighbors(tile_xy) -> list:
         neighbors = []
         for k, v in DIRECTIONS.items():
             if k == "wait":
                 continue
             x, y = tile_xy[0] + v[0], tile_xy[1] + v[1]
-            if in_bounds((x, y)):
+            if in_bounds((x, y), wh_tuple):
                 neighbors.append(tiles[x][y])
         return neighbors
     # starting with just ocean
-    for x in range(wh_tuple[0]):
+    for x in range(w):
         tiles.append([])
-        for y in range(wh_tuple[1]):
+        for y in range(h):
             tiles[x].append(Tile((x, y), "ocean"))
             if chebyshev_distance(opposite, (x, y)) < 10:
                 tiles[x][y].exclusion_zone = True
     land_margin = min(wh_tuple) // 5
     # anchor point #1
-    if elbow == "upright" or elbow == "downright":
+    if orientation == "upright" or orientation == "downright":
         anchor_1_range = (0, land_margin)
-    elif elbow == "upleft" or elbow == "downleft":
-        anchor_1_range = (wh_tuple[0] - land_margin, wh_tuple[0] - 1)
+    elif orientation == "upleft" or orientation == "downleft":
+        anchor_1_range = (w - land_margin, w - 1)
     # anchor point #2
-    if elbow == "upright" or elbow == "upleft":
-        anchor_2_range = (wh_tuple[1] - land_margin, wh_tuple[1] - 1)
-    if elbow == "downright" or elbow == "downleft":
+    if orientation == "upright" or orientation == "upleft":
+        anchor_2_range = (h - land_margin, h - 1)
+    if orientation == "downright" or orientation == "downleft":
         anchor_2_range = (0, land_margin)
     # Bend anchor point 
-    if elbow == "upright":
-        bend_rect = (0, wh_tuple[1] - land_margin, land_margin, land_margin)
-    elif elbow == "upleft":
-        bend_rect = (wh_tuple[0] - land_margin, wh_tuple[1] - land_margin, land_margin, land_margin)
-    elif elbow == "downright":
+    if orientation == "upright":
+        bend_rect = (0, h - land_margin, land_margin, land_margin)
+    elif orientation == "upleft":
+        bend_rect = (w - land_margin, h - land_margin, land_margin, land_margin)
+    elif orientation == "downright":
         bend_rect = (0, 0, land_margin, land_margin)
-    elif elbow == "downleft":
-        bend_rect = (wh_tuple[0] - land_margin, 0, land_margin, land_margin)
+    elif orientation == "downleft":
+        bend_rect = (w - land_margin, 0, land_margin, land_margin)
     # select anchor points from their ranges
-    if elbow == "upright" or elbow == "upleft":
+    if orientation == "upright" or orientation == "upleft":
         anchor_point_1 = (randint(anchor_1_range[0], anchor_1_range[1]), 0)
-    elif elbow == "downright" or elbow == "downleft":
-        anchor_point_1 = (randint(anchor_1_range[0], anchor_1_range[1]), wh_tuple[1] - 1)
-    if elbow == "upright" or elbow == "downright":
-        anchor_point_2 = (wh_tuple[0] - 1, randint(anchor_2_range[0], anchor_2_range[1]))
-    elif elbow == "upleft" or elbow == "downleft":
+    elif orientation == "downright" or orientation == "downleft":
+        anchor_point_1 = (randint(anchor_1_range[0], anchor_1_range[1]), h - 1)
+    if orientation == "upright" or orientation == "downright":
+        anchor_point_2 = (w - 1, randint(anchor_2_range[0], anchor_2_range[1]))
+    elif orientation == "upleft" or orientation == "downleft":
         anchor_point_2 = (0, randint(anchor_2_range[0], anchor_2_range[1]))
     bend_point = (randint(bend_rect[0], bend_rect[0] + bend_rect[2]), randint(bend_rect[1], bend_rect[1] + bend_rect[3]))
     max_walk_deviation = 30 
     # the first walk (vertical)
-    if elbow == "upright" or elbow == "upleft":
+    if orientation == "upright" or orientation == "upleft":
         walk_start = anchor_point_1
         walk_end = bend_point
-    elif elbow == "downright" or elbow == "downleft":
+    elif orientation == "downright" or orientation == "downleft":
         walk_start = bend_point
         walk_end = anchor_point_1
     current_x = walk_start[0]
     for y in range(walk_start[1], walk_end[1] + 1):
-        if y < wh_tuple[1]:
-            if elbow == "upright" or elbow == "downright":
+        if y < h:
+            if orientation == "upright" or orientation == "downright":
                 land_range = range(0, current_x + 1) 
-            elif elbow == "upleft" or elbow == "downleft":
-                land_range = range(current_x, wh_tuple[0]) 
+            elif orientation == "upleft" or orientation == "downleft":
+                land_range = range(current_x, w) 
             for x in land_range:
                 tiles[x][y].tile_type = "land"
                 tiles[x][y].mainland = True
-            if elbow == "upright" or elbow == "downright":
+            if orientation == "upright" or orientation == "downright":
                 if current_x == 0:
                     deviation = randint(0, 2)
                 elif current_x == walk_start[0] + max_walk_deviation:
                     deviation = randint(-2, 0)
                 else:
                     deviation = randint(-2, 2)
-            elif elbow == "upleft" or elbow == "downleft":
+            elif orientation == "upleft" or orientation == "downleft":
                 if current_x == walk_start[0] - max_walk_deviation:
                     deviation = randint(0, 2)
                 elif current_x == wh_tuple[0] - 1:
@@ -118,46 +154,46 @@ def gen_campaign_map(wh_tuple) -> tuple:
             current_x += deviation
             if current_x < 0:
                 current_x = 0
-            elif current_x >= wh_tuple[0]:
-                current_x = wh_tuple[0] - 1
+            elif current_x >= w:
+                current_x = w - 1
     # fill in the corner
-    if elbow == "upright" or elbow == "downright":
+    if orientation == "upright" or orientation == "downright":
         fill_range_x = range(0, current_x + 1)
-    elif elbow == "upleft" or elbow == "downleft":
-        fill_range_x = range(current_x, wh_tuple[0])
-    if elbow == "upright" or elbow == "upleft":
-        fill_range_y = range(walk_end[1], wh_tuple[1])
-    elif elbow == "downright" or elbow == "downleft":
+    elif orientation == "upleft" or orientation == "downleft":
+        fill_range_x = range(current_x, w)
+    if orientation == "upright" or orientation == "upleft":
+        fill_range_y = range(walk_end[1], h)
+    elif orientation == "downright" or orientation == "downleft":
         fill_range_y = range(0, bend_point[1])
     for x in fill_range_x:
         for y in fill_range_y:
            tiles[x][y].tile_type = "land"
            tiles[x][y].mainland = True
     # the second walk (horizontal)
-    if elbow == "upright" or elbow == "downright":
+    if orientation == "upright" or orientation == "downright":
         walk_start = (current_x, bend_point[1])
         walk_end = anchor_point_2
-    elif elbow == "upleft" or elbow == "downleft":
+    elif orientation == "upleft" or orientation == "downleft":
         walk_start = anchor_point_2
         walk_end = (current_x, bend_point[1])
     current_y = walk_start[1]
     for x in range(walk_start[0], walk_end[0] + 1):
         if x < wh_tuple[0]:
-            if elbow == "upright" or elbow == "upleft":
-                land_range = range(current_y, wh_tuple[1])
-            elif elbow == "downright" or elbow == "downleft":
+            if orientation == "upright" or orientation == "upleft":
+                land_range = range(current_y, h)
+            elif orientation == "downright" or orientation == "downleft":
                 land_range = range(0, current_y + 1)
             for y in land_range:
                 tiles[x][y].tile_type = "land"
                 tiles[x][y].mainland = True
-            if elbow == "upright" or elbow == "upleft":
+            if orientation == "upright" or orientation == "upleft":
                 if current_y == walk_start[1] - max_walk_deviation:
                     deviation = randint(0, 2)
                 elif current_y == wh_tuple[1] - 2:
                     deviation = randint(-2, 0)
                 else:
                     deviation = randint(-2, 2)
-            elif elbow == "downright" or elbow == "downleft":
+            elif orientation == "downright" or orientation == "downleft":
                 if current_y == 0:
                     deviation = randint(0, 2)
                 elif current_y == walk_start[1] + max_walk_deviation:
@@ -167,12 +203,12 @@ def gen_campaign_map(wh_tuple) -> tuple:
             current_y += deviation
             if current_y < 0:
                 current_y = 0
-            elif current_y >= wh_tuple[1]:
-                current_y = wh_tuple[1] - 1
+            elif current_y >= h:
+                current_y = h - 1
     # A pass to ensure no long stretches of perfectly straight coast, and add extra fuzz
     coastals = []
-    for x in range(wh_tuple[0]):
-        for y in range(wh_tuple[1]):
+    for x in range(w):
+        for y in range(h):
             nbrs = neighbors((x, y))
             tile = tiles[x][y]
             if tile.tile_type == "land" and any(map(lambda x: x.tile_type == "ocean", nbrs)):
@@ -206,9 +242,8 @@ def gen_campaign_map(wh_tuple) -> tuple:
                 tile.tile_type = "land"
                 tile.mainland = True
     # islands
-    print(len(contiguous_ocean))
     for tile in contiguous_ocean:
-        if randint(1, 10) < 7 and not tile.exclusion_zone: # tentative
+        if randint(1, 10) < 7 and not tile.exclusion_zone: 
             tile.tile_type = "land"
             tile.island = True 
             tile.contiguous_ocean = False
@@ -246,6 +281,8 @@ def gen_campaign_map(wh_tuple) -> tuple:
     contiguous_ocean = [tiles[start[0]][start[1]]]
     search = [tiles[start[0]][start[1]]]
     tiles[start[0]][start[1]].contiguous_ocean = True
+    potential_sea_route_end_nodes = []
+    sea_route_end_nodes = []
     while len(search) > 0:
         tile = search.pop()
         nbrs = neighbors(tile.xy_tuple)
@@ -254,21 +291,17 @@ def gen_campaign_map(wh_tuple) -> tuple:
                 contiguous_ocean.append(nbr)
                 nbr.contiguous_ocean = True
                 search.append(nbr)
-    for x in range(wh_tuple[0]):
-        for y in range(wh_tuple[1]):
+    for x in range(w):
+        for y in range(h):
             tile = tiles[x][y]
             if tile.tile_type == "ocean" and not tile.contiguous_ocean:
                 tile.tile_type = "land"
                 tile.island = True
     # ensure non-mainland edges free
-    for x in range(wh_tuple[0]):
-        for y in range(wh_tuple[1]):
+    for x in range(w):
+        for y in range(h):
             tile = tiles[x][y]
-            if tile.tile_type == "land" and not tile.mainland and \
-                (x == 0 or \
-                y == 0 or \
-                x == wh_tuple[0] - 1 or \
-                y == wh_tuple[1] - 1):
+            if tile.tile_type == "land" and not tile.mainland and (x == 0 or y == 0 or x == w - 1 or y == h - 1):
                 tile.tile_type = "ocean"
                 tile.island = False
                 tile.contiguous_ocean = True
@@ -277,23 +310,18 @@ def gen_campaign_map(wh_tuple) -> tuple:
     # TODO: mountains and mountain ranges
     # TODO: rivers
     # cities 
-    def valid_tiles_in_range_of(tiles_ls, xy_tuple, d) -> list: 
-        locs = []
-        for x in range(xy_tuple[0] - d, xy_tuple[0] + d + 1):
-            for y in range(xy_tuple[1] - d, xy_tuple[1] + d + 1):
-                valid = in_bounds((x, y)) and chebyshev_distance((x, y), xy_tuple) <= d
-                if valid:
-                    locs.append(tiles[x][y])
-        return locs 
     coastal_city_locations = [] 
-    for x in range(wh_tuple[0]):
-        for y in range(wh_tuple[1]):
+    for x in range(w):
+        for y in range(h):
             tile = tiles[x][y]
             if tile.tile_type == "land":
                 nbrs = neighbors(tile.xy_tuple)
                 borders_ocean = first(lambda x: x.tile_type == "ocean", nbrs) is not None
                 if borders_ocean:
                     coastal_city_locations.append(tile)
+                    tile.coast = True
+                else:
+                    tile.coast = False
     shuffle(coastal_city_locations)
     emplaced_cities = 0
     for tile in coastal_city_locations:
@@ -303,10 +331,15 @@ def gen_campaign_map(wh_tuple) -> tuple:
         if not city_too_close:
             tile.tile_type = "city"
             tile.coast = True
+            tile.faction = "enemy"
             emplaced_cities += 1
+            if tile.mainland:
+                mainland_coastal_city_tiles.append(tile)
+            elif tile.island:
+                island_coastal_city_tiles.append(tile)
     marked_untakeable = 0
-    for x in range(wh_tuple[0]):
-        for y in range(wh_tuple[1]):
+    for x in range(w):
+        for y in range(h):
             tile = tiles[x][y]
             diffusion = randint(LAND_CITY_DIFFUSION_RANGE[0], LAND_CITY_DIFFUSION_RANGE[1])
             city_too_close = first(lambda x: x.tile_type == "city", valid_tiles_in_range_of(tiles, tile.xy_tuple, \
@@ -318,12 +351,9 @@ def gen_campaign_map(wh_tuple) -> tuple:
                     emplaced_cities += 1
                     if marked_untakeable < NUM_UNTAKEABLE_CITIES:
                         tile.untakeable_city = True
-    # NOTE: ^-- the rest (trade routes, nations, etc.) will be handled in Scene scope. And at some point I'll want to
-    #           optimize this by combining some things which are currently handled in separate steps. And extract some
-    #           generic functions for drunken walks and cellular automata, for use in other map types. Importantly,
-    #           with bounds parameters, so I can use them on bigger maps where big-O will be a serious concern. This is
-    #           basically a rough draft. Importantly, this is tightly bounded by a (for now) 60x60 tile campaign map.
-    return (tiles, elbow, opposite)
+    return (tiles, orientation, opposite, mainland_coastal_city_tiles, island_coastal_city_tiles, sea_route_end_nodes)
+
+# Tactical Maps 
 
 def gen_open_ocean(wh_tuple) -> list:
     tiles = []
@@ -373,7 +403,8 @@ class TileMap:
         self.wh_tuple = wh_tuple
         self.geography_type = geography_type
         if geography_type == "campaign":
-            self.tiles, self.orientation, self.player_origin = geography_generators[geography_type](wh_tuple)
+            self.tiles, self.orientation, self.player_origin, self.mainland_coastal_city_tiles, \
+                self.island_coastal_city_tiles, self.sea_route_end_nodes = geography_generators[geography_type](wh_tuple)
         else:
             self.tiles = geography_generators[geography_type](wh_tuple)
 
@@ -405,3 +436,17 @@ class TileMap:
             return False
         return self.tiles[xy_tuple[0]][xy_tuple[1]].occupied 
 
+    def land_buffer_mod(self, xy_tuple) -> int:
+        level = 1
+        while True:
+            tiles_in_level = valid_tiles_in_range_of(self.tiles, xy_tuple, level)
+            for tile in tiles_in_level:
+                if tile.tile_type != "ocean":
+                    return -level
+            level += 1
+
+    def distance_from_edge(self, xy_tuple) -> int:
+        x, y = xy_tuple
+        w, h = self.wh_tuple
+        return min([x, y, w - 1 - x, h - 1 - y])
+        

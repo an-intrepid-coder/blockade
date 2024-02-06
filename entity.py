@@ -81,7 +81,6 @@ class CampaignEntity(Entity):
     def __init__(self, xy_tuple, faction, hidden=False):
         super().__init__(xy_tuple, faction)
         self.hidden = hidden
-    # TODO: maybe more here
 
 class PlayerCampaignEntity(CampaignEntity):
     def __init__(self, xy_tuple, debug):
@@ -94,6 +93,17 @@ class PlayerCampaignEntity(CampaignEntity):
             self.hp = {"current": 2000, "max": 2000}  
         else:
             self.hp = {"current": PLAYER_HP, "max": PLAYER_HP}  
+        self.speed = 30
+        self.torps = PLAYER_DEFAULT_TORPS
+        self.missiles = PLAYER_DEFAULT_MISSILES
+
+class ResupplyVessel(CampaignEntity):
+    def __init__(self, xy_tuple):
+        super().__init__(xy_tuple, "allied")
+        self.name = "resupply vessel"
+        self.image = unit_tile_circle(faction_to_color[self.faction])
+        self.can_ocean_move = True
+        self.hp = 30
         self.speed = 30
 
 class TacticalEntity(Entity): 
@@ -124,7 +134,7 @@ class TacticalEntity(Entity):
         self.torpedos_incoming = []
         self.missiles_incoming = []
         self.submersible = False
-        self.direction = direction # TODO: refactor this to something like "naive_travel_direction"
+        self.direction = direction 
         self.identified = False
         # NOTE: For now, mission scope assumes all enemy entities are in a single "formation". But larger mission types
         #       in future versions will require assigning each unit to a specific formation w/ a specific task.
@@ -212,12 +222,12 @@ class PlayerSub(TacticalEntity):
         self.name = campaign_entity.name
         self.player = True
         self.abilities = [
-            ShortRangeTorpedo(), 
+            ShortRangeTorpedo(ammo=campaign_entity.torps), 
             PassiveSonar(), 
             ActiveSonar(),
             ToggleSpeed(), 
             Radar(), 
-            ShortRangeMissile()
+            ShortRangeMissile(ammo=campaign_entity.missiles)
         ]
         # NOTE: tentative values below
         self.skills["stealth"] = 18 

@@ -3,6 +3,11 @@ from euclidean import manhattan_distance
 
 # situational roll modifiers
 
+def traffic_points_encounter_mod(traffic_points):
+    return max(traffic_points // 3, 3)
+
+heavy_escort_is_rare = -2
+
 # penalty to torpedo evasion if they are not known about
 # NOTE: The offchance of an unknown torpedo to be "evaded" represents targeting errors, duds, etc.
 unknown_torpedo_evasion_penalty = -6

@@ -10,7 +10,7 @@ def apply(fn, ls):
     for element in ls:
         fn(element)
 
-# Recursively flatten a multi-dimensional list
+# Flatten a multi-dimensional list
 def flatten(ls) -> list:
     lists = []
     new_ls = []

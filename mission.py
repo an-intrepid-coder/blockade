@@ -6,7 +6,7 @@ class Mission:
         self.briefing_lines = []
 
 class ConvoyAttack(Mission):
-    def __init__(self):
+    def __init__(self, scale, subs, heavy_escort, offmap_asw, neutral_freighters):
         super().__init__()
         self.briefing_lines.extend([
             "___CONVOY ATTACK MISSION BRIEFING___", "",
@@ -20,13 +20,10 @@ class ConvoyAttack(Mission):
             "___INTEL REPORT__",
             "",
         ])
-        scale = randint(1, 2) # **
         if scale > 1: 
             self.briefing_lines.extend(["> This is a large convoy.", ""])
-        subs = randint(1, 3) == 1 # **
         if subs:
             self.briefing_lines.extend(["> Enemy submarine escorts suspected.", ""])
-        heavy_escort = randint(1, 6) == 1 # **
         if heavy_escort: 
             self.briefing_lines.extend([
                 "> Powerful heavy escort ship suspected. This dangerous",
@@ -34,19 +31,15 @@ class ConvoyAttack(Mission):
                 "and carries an ASW helicopter. Approach with caution.",
                 "",
             ])
-        offmap_asw = randint(1, 4) == 1 # **
         if offmap_asw: 
             self.briefing_lines.extend([
                 "> Within range of land-based ASW patrol planes.",
                 "They may drop lines of sonobuoys across the map.",
                 "",
             ])
-        neutral_freighters = randint(1, 3) == 1 # **
         if neutral_freighters: 
             self.briefing_lines.extend(["> Neutral shipping in the area.", ""])
         self.briefing_lines.append("<ESC to continue>")
-        # NOTE: When campaign mode implemented soon, these chances be part of mission selection, and they will
-        #       be contextual. Current setup for playing in the sandbox and testing mechanics.
         self.scale = scale
         self.freighters = True
         self.escorts = True

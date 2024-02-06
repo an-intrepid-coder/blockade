@@ -6,7 +6,25 @@ def roll3d6() -> list:
     return rolls
 
 # NOTE: Specific rolls may use more/less dice, or take
-#       modifiers, at some point.
+#       more modifiers, at some point.
+
+def roll_shipping_encounter(traffic_points, mods=[]) -> int:
+    return sum(roll3d6()) - (2 + traffic_points + sum(mods))
+
+def roll_large_encounter(traffic_points, mods=[]) -> bool:
+    return sum(roll3d6()) - (2 + traffic_points + sum(mods)) <= 0
+
+def roll_sub_encounter(traffic_points, mods=[]) -> bool:
+    return sum(roll3d6()) - (2 + traffic_points + sum(mods)) <= 0
+
+def roll_heavy_escort_encounter(traffic_points, mods=[]) -> bool:
+    return sum(roll3d6()) - (2 + traffic_points + sum(mods)) <= 0
+
+def roll_offmap_asw_encounter(traffic_points, mods=[]) -> bool:
+    return sum(roll3d6()) - (2 + traffic_points + sum(mods)) <= 0
+
+def roll_neutrals_encounter(traffic_points, mods=[]) -> bool:
+    return sum(roll3d6()) - (2 + traffic_points + sum(mods)) <= 0
 
 def roll_torpedo_damage() -> int:
     return sum(roll3d6())
@@ -19,6 +37,9 @@ def roll_for_acc_degradation() -> int:
 
 def roll_for_acc_upgrade() -> int:
     return sum(roll3d6()) // 2
+
+def roll_for_front_change(mods) -> int:
+    return sum(roll3d6()) <= 6 + sum(mods)
 
 # Similar to the way skill checks work in GURPS.
 def roll_skill_check(entity, skill, mods=[]) -> int:
