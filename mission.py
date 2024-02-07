@@ -4,6 +4,20 @@ from constants import *
 class Mission:
     def __init__(self):
         self.briefing_lines = []
+        self.freighters_sunk = 0
+        self.escorts_sunk = 0
+        self.subs_sunk = 0
+        self.heavy_escorts_sunk = 0
+        self.neutral_freighters_sunk = 0
+        self.stealth_retained = True
+
+    def danger_increased(self) -> bool:
+        return self.stealth_retained == False \
+            or self.freighters_sunk > 0 \
+            or self.escorts_sunk > 0 \
+            or self.subs_sunk > 0 \
+            or self.heavy_escorts_sunk > 0 \
+            or self.neutral_freighters_sunk > 0
 
 class ConvoyAttack(Mission):
     def __init__(self, scale, subs, heavy_escort, offmap_asw, neutral_freighters):
@@ -47,12 +61,6 @@ class ConvoyAttack(Mission):
         self.heavy_escort = heavy_escort
         self.offmap_asw = offmap_asw
         self.neutral_freighters = neutral_freighters
-        self.freighters_sunk = 0
-        self.escorts_sunk = 0
-        self.subs_sunk = 0
-        self.heavy_escorts_sunk = 0
-        self.neutral_freighters_sunk = 0
-        self.stealth_retained = True
         self.boss_present = self.heavy_escort # NOTE: more "bosses" in time
         self.diff_mod = subs > 0 or offmap_asw or neutral_freighters
         self.player_fate = "Mission Survived!"
@@ -89,8 +97,6 @@ class ConvoyAttack(Mission):
         score = (PLAYER_HP - player_hp) * SCORE_HP      
         for _ in range(self.freighters_sunk):
             score += SCORE_FREIGHTER
-            if self.stealth_retained:
-                score += SCORE_STEALTH_RETAINED
             if self.boss_present:
                 score += SCORE_BOSS_PRESENT
             if self.diff_mod:
@@ -105,5 +111,70 @@ class ConvoyAttack(Mission):
             score += SCORE_NEUTRAL_FREIGHTER
         if self.stealth_retained:
             score += SCORE_STEALTH_RETAINED
+        return score
+
+class AswPatrol(Mission):
+    def __init__(self, scale, offmap_asw):
+        super().__init__()
+        self.briefing_lines.extend([
+            "___ASW PATROL MISSION BRIEFING___", "",
+            "You have been spotted by an enemy ASW patrol! They are aware of your position, and",
+            "will be upon you soon. If you have missiles in stock then you may be able to make a",
+            "pre-emptive strike, but your best bet is to make a run for it.",
+            "",
+            "___INTEL REPORT__",
+            "",
+        ])
+        if scale > 1: 
+            self.briefing_lines.extend(["> This is a large patrol.", ""])
+        if offmap_asw: 
+            self.briefing_lines.extend([
+                "> Within range of land-based ASW patrol planes.",
+                "They may drop lines of sonobuoys across the map.",
+                "",
+            ])
+        self.briefing_lines.append("<ESC to continue>")
+        self.scale = scale
+        self.freighters = False
+        self.escorts = True
+        self.subs = False
+        self.heavy_escort = False
+        self.offmap_asw = offmap_asw
+        self.neutral_freighters = False
+        self.boss_present = False
+        self.diff_mod = offmap_asw
+        self.player_fate = "Mission Survived!"
+
+    def assessment_lines(self, player_hp) -> list: 
+        score = self.calculate_score(player_hp)
+        lines = [
+            "{}".format(self.player_fate), "",
+            "___MISSION SCORE__", 
+            ""
+        ]
+        if player_hp < PLAYER_HP:
+            lines.append("Damage Taken: ({})".format((PLAYER_HP - player_hp) * SCORE_HP))
+        lines.extend([
+            "Small Escorts Sunk: {} (+{} each)".format(self.escorts_sunk, SCORE_SMALL_CONVOY_ESCORT)
+        ])
+        if player_hp > 0:
+            lines.append("Survival Bonus: {}".format(SCORE_ASW_PATROL_SURVIVAL))
+        if self.stealth_retained:
+            lines.append("Retained Stealth: (+{})".format(SCORE_STEALTH_RETAINED))
+        if self.diff_mod:
+            lines.append("Bonus for ASW Planes Present: (+{})".format(SCORE_ASW_PATROL_WITH_PLANES))
+        lines.extend(["", "Total: {}".format(score)])
+        return lines
+
+    def calculate_score(self, player_hp) -> int: 
+        score = (PLAYER_HP - player_hp) * SCORE_HP      
+        if self.diff_mod:
+            score += SCORE_ASW_PATROL_WITH_PLANES
+        for _ in range(self.escorts_sunk):
+            score += SCORE_SMALL_CONVOY_ESCORT
+        if self.stealth_retained:
+            score += SCORE_STEALTH_RETAINED
+        if player_hp > 0:
+            score += SCORE_ASW_PATROL_SURVIVAL
         return score
 

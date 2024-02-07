@@ -1,4 +1,5 @@
 from rolls import *
+from loading_screen import loading_screen
 from tile_map import *
 from entity import *
 from euclidean import manhattan_distance, chebyshev_distance
@@ -375,8 +376,26 @@ class Scene:
                 or self.escape_pressed() \
                 or self.cycle_target() \
                 or self.toggled_hud() \
+                or self.toggled_shipping_heat_map() \
+                or self.toggled_danger_points_heat_map() \
                 or self.help_button_pressed() \
                 or self.exited_game() 
+
+    def toggled_shipping_heat_map(self) -> bool: 
+        if pygame.key.get_pressed()[K_s] and self.shift_pressed():
+            self.displaying_shipping_heat_map = not self.displaying_shipping_heat_map
+            self.display_changed = True
+            self.push_to_console("Displaying shipping heat map: {}".format(self.displaying_shipping_heat_map))
+            return True
+        return False
+
+    def toggled_danger_points_heat_map(self) -> bool: 
+        if pygame.key.get_pressed()[K_d] and self.shift_pressed():
+            self.displaying_danger_points_heat_map = not self.displaying_danger_points_heat_map
+            self.display_changed = True
+            self.push_to_console("Displaying danger zone heat map: {}".format(self.displaying_danger_points_heat_map))
+            return True
+        return False
 
     def help_button_pressed(self) -> bool:
         if pygame.key.get_pressed()[K_SLASH] and self.shift_pressed():
@@ -418,6 +437,8 @@ class Scene:
                 "[ctrl + q]: quit game", "",
                 "[ctrl + w]: swap hud placement", "",
                 "[shift + w]: toggle hud", "",
+                "[shift + s]: toggle shipping heat map", "",
+                "[shift + d]: toggle danger heat map", "",
                 "[left/right brackets, HOME]: scroll console, reset console", "",
             ]
         return lines
@@ -575,6 +596,9 @@ class CampaignScene(Scene):
         self.game_over_splash = None
         self.extra_lives = 1
         self.last_extra_life = 0
+        self.displaying_shipping_heat_map = True
+        self.displaying_danger_points_heat_map = True
+        self.had_encounter = False
 
     def generate_campaign(self):
         self.tilemap = TileMap(CAMPAIGN_MAP_SIZE, "campaign")
@@ -607,6 +631,14 @@ class CampaignScene(Scene):
         self.sim_event_place_resupply_vessel() 
         self.active_front_tiles = []
         self.next_front_shift = 0
+        self.map_danger_points = self.djikstra_map_danger_points() 
+
+    def sim_event_increase_danger_zone(self):
+        tile = self.tilemap.get_tile(self.player.xy_tuple)
+        tile.danger_points += DEFAULT_DANGER_POINTS
+        for nbr in self.tilemap.neighbors_of(tile.xy_tuple):
+            nbr.danger_points += randint(1, DEFAULT_DANGER_POINTS // 2)
+        self.display_changed = True
 
     def sim_event_place_resupply_vessel(self):
         x, y = self.invasion_target.xy_tuple
@@ -628,6 +660,18 @@ class CampaignScene(Scene):
                 neighbors = self.tilemap.neighbors_of((x, y))
                 traffic_points = len(list(filter(lambda z: z.sea_route_node or z.logistical_sea_route, neighbors)))
                 djikstra_map[x].append(traffic_points)
+        return djikstra_map
+
+    def djikstra_map_danger_points(self) -> list:
+        w, h = self.tilemap.wh_tuple
+        djikstra_map = [] 
+        for x in range(w):
+            djikstra_map.append([])
+            for y in range(h):
+                neighbors = self.tilemap.neighbors_of((x, y))
+                danger_points = len(list(filter(lambda z: z.danger_points > 0, neighbors)))
+                danger_points += self.tilemap.get_tile((x, y)).danger_points
+                djikstra_map[x].append(danger_points)
         return djikstra_map
 
     def djikstra_map_distance_to_sea_route_end_node(self) -> list:
@@ -677,7 +721,8 @@ class CampaignScene(Scene):
             "possibility for ASW patrol planes covering convoy targets.", "",
             "> You gain an Extra Life every {} points. Earn points by destroying freighters!".format(EXTRA_LIFE_THRESHOLD), "",
             "> The green heat map represents shipping lanes. The brighter the green, the bigger", 
-            "the risk/reward.", "",
+            "the risk/reward. The orange heat map represents danger zones and the potential for", 
+            "ASW patrols.", "",
             "> Press '?' for controls.", "",
             "> This is a prototype. Not all of the features are in yet, and some bugs are probably",
             "around (but not many!)", ""
@@ -711,22 +756,41 @@ class CampaignScene(Scene):
     def sim_event_encounter_check(self): 
         x, y = self.player.xy_tuple
         traffic_points = self.map_traffic_points[x][y]
-        roll = roll_shipping_encounter(traffic_points)
-        if roll <= 0:
-            self.push_to_console("Convoy contact!") 
-            if roll_large_encounter(traffic_points):
-                scale = 2
-            else:
-                scale = 1
-            mission = ConvoyAttack(scale=scale, \
-                subs=self.encounter_has_subs(traffic_points), \
-                heavy_escort=self.encounter_has_heavy_escort(traffic_points), \
-                offmap_asw=self.encounter_has_offmap_asw(self.player.xy_tuple, traffic_points), \
-                neutral_freighters=roll_neutrals_encounter(traffic_points))
-            self.game.scene_tactical_combat = TacticalScene(self.game, mission)
-            self.game.current_scene = self.game.scene_tactical_combat
-            self.game.campaign_mode = False
-            self.last_repair_check = self.time_units_passed
+        danger_points = self.map_danger_points[x][y]
+        if roll_shipping_encounter(traffic_points) <= 0:
+            self.sim_event_shipping_encounter(traffic_points)
+        elif danger_points > 0 and roll_asw_encounter(danger_points) <= 0:
+            self.sim_event_asw_encounter(danger_points, traffic_points)
+
+    def sim_event_asw_encounter(self, danger_points, traffic_points):
+        if danger_points > 20:
+            scale = 2
+        else: 
+            scale = 1
+        mission = AswPatrol(scale, self.encounter_has_offmap_asw(self.player.xy_tuple, traffic_points))
+        self.game.scene_tactical_combat = TacticalScene(self.game, mission)
+        self.game.current_scene = self.game.scene_tactical_combat
+        self.game.campaign_mode = False
+        self.last_repair_check = self.time_units_passed
+        self.had_encounter = True
+
+    def sim_event_shipping_encounter(self, traffic_points):
+        loading_screen()
+        self.push_to_console("Convoy contact!") 
+        if roll_large_encounter(traffic_points):
+            scale = 2
+        else:
+            scale = 1
+        mission = ConvoyAttack(scale=scale, \
+            subs=self.encounter_has_subs(traffic_points), \
+            heavy_escort=self.encounter_has_heavy_escort(traffic_points), \
+            offmap_asw=self.encounter_has_offmap_asw(self.player.xy_tuple, traffic_points), \
+            neutral_freighters=roll_neutrals_encounter(traffic_points))
+        self.game.scene_tactical_combat = TacticalScene(self.game, mission)
+        self.game.current_scene = self.game.scene_tactical_combat
+        self.game.campaign_mode = False
+        self.last_repair_check = self.time_units_passed
+        self.had_encounter = True
 
     def encounter_has_subs(self, traffic_points) -> bool:
         bonus = [modifiers.traffic_points_encounter_mod(traffic_points)]
@@ -751,8 +815,18 @@ class CampaignScene(Scene):
         return False
 
     def turn_based_routines(self):
+        def turn_ready():
+            return (self.player_turn_ended or self.player_long_wait) \
+                and not self.game_over \
+                and self.game.current_scene is self
+        def encounter_post():
+            return self.had_encounter and self.game.current_scene is self
         self.game_over_check()
-        if (self.player_turn_ended or self.player_long_wait) and not self.game_over:
+        if encounter_post():
+            self.map_danger_points = self.djikstra_map_danger_points()
+            self.had_encounter = False
+            self.display_changed = True
+        if turn_ready():
             self.observation_index = 0
             self.game.exit_game_confirm = False
             self.processing = True
@@ -760,14 +834,22 @@ class CampaignScene(Scene):
             self.run_entity_behavior()  
             self.dead_entity_check()
             self.player_long_wait_check() 
-            if not self.player_long_wait:
-                self.update_mini_map() 
-                self.player_turn_ended = False
-                self.processing = False
             self.sim_event_encounter_check() 
             self.sim_event_resupply_check()
             self.sim_event_repair_check()
             self.sim_event_extra_lives_check() 
+            self.sim_event_danger_points_check()
+            if not self.player_long_wait:
+                self.update_mini_map() 
+                self.player_turn_ended = False
+                self.processing = False
+
+    def sim_event_danger_points_check(self):
+        w, h = self.tilemap.wh_tuple
+        for x in range(w):
+            for y in range(h):
+                self.tilemap.get_tile((x, y)).reduce_danger_points()
+        self.map_danger_points = self.djikstra_map_danger_points()
 
     def sim_event_extra_lives_check(self):
         if self.last_extra_life + EXTRA_LIFE_THRESHOLD <= self.game.total_score:
@@ -1073,10 +1155,16 @@ class CampaignScene(Scene):
                         within_highlight = tile in self.mission_tiles
                         pygame.draw.rect(self.screen, "navy", rect)
                         traffic_points = self.map_traffic_points[x][y]
-                        if traffic_points > 0:
-                            alpha = OVERLAY_ALPHA_BASE + OVERLAY_ALPHA_INC * traffic_points
+                        if traffic_points > 0 and self.displaying_shipping_heat_map:
+                            alpha = min(OVERLAY_ALPHA_BASE + OVERLAY_ALPHA_INC * traffic_points, 255)
                             surf = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
                             surf.fill(TRAFFIC_OVERLAY_COLOR + [alpha])
+                            self.screen.blit(surf, (rect[0], rect[1]))
+                        danger_points = self.map_danger_points[x][y]
+                        if danger_points > 0 and self.displaying_danger_points_heat_map:
+                            alpha = min(OVERLAY_ALPHA_BASE + OVERLAY_ALPHA_INC * danger_points, 255)
+                            surf = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
+                            surf.fill(ENEMY_SONAR_OVERLAY_COLOR + [alpha])
                             self.screen.blit(surf, (rect[0], rect[1]))
                     elif tile.tile_type == "land":
                         pygame.draw.rect(self.screen, "olive", rect) 
@@ -1221,6 +1309,11 @@ class TacticalScene(Scene):
             direction = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
             random_spawn(units, Freighter(origin, "neutral", direction=direction))
         self.entities = units
+        # special case of ASW Patrol
+        if isinstance(mission, AswPatrol):
+            for unit in units:
+                unit.chaser = True
+                unit.contacts.append(Contact(self.player, 100))
 
     def used_ability(self) -> bool:
         ability_key = self.ability_key_pressed()
@@ -1467,6 +1560,8 @@ class TacticalScene(Scene):
             self.game.campaign_mode = True
             self.game.scene_campaign_map.player.torps = self.player.get_ability("torpedo").ammo
             self.game.scene_campaign_map.player.missiles = self.player.get_ability("missile").ammo
+            if self.mission.danger_increased():
+                self.game.scene_campaign_map.sim_event_increase_danger_zone()
             return True
         return False
 
@@ -2518,8 +2613,14 @@ class TacticalScene(Scene):
                 break
         if player_recently_seen and not self.player_in_enemy_contacts:
             # start chase
-            chasers = chasers_by_distance(enemy_units)
-            if len(chasers) > 0 and not currently_chasing(chasers):
-                new_chaser = closest_chaser(chasers)
-                new_chaser.chasing = True
+            if isinstance(self.mission, AswPatrol):
+                new_direction = choice(list(filter(lambda x: x != "wait", DIRECTIONS.keys())))
+                for unit in enemy_units:
+                    unit.chasing = True
+                    unit.direction = new_direction
+            else:
+                chasers = chasers_by_distance(enemy_units)
+                if len(chasers) > 0 and not currently_chasing(chasers):
+                    new_chaser = closest_chaser(chasers)
+                    new_chaser.chasing = True
 

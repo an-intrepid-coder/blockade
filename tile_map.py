@@ -54,6 +54,11 @@ class Tile:
         self.sea_route_node = False
         self.logistical_sea_route = False
         self.active_front = False
+        self.danger_points = 0
+
+    def reduce_danger_points(self):
+        if self.danger_points > 0:
+            self.danger_points -= 1
 
 geography_types = ["campaign", "open ocean", "coastline", "bay", "peninsula", "archipelago", "inland sea"]
 

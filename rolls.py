@@ -8,6 +8,9 @@ def roll3d6() -> list:
 # NOTE: Specific rolls may use more/less dice, or take
 #       more modifiers, at some point.
 
+def roll_asw_encounter(danger_points, mods=[]) -> int:
+    return sum(roll3d6()) - (2 + min(danger_points, 3) + sum(mods))
+
 def roll_shipping_encounter(traffic_points, mods=[]) -> int:
     return sum(roll3d6()) - (2 + traffic_points + sum(mods))
 
