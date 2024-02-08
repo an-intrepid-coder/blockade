@@ -41,6 +41,7 @@ if __name__ == "__main__":
     desktop_size = pygame.display.get_desktop_sizes()[0]
     pygame.display.set_mode((desktop_size[0], desktop_size[1]), flags) 
     pygame.mixer.quit()
+    pygame.mouse.set_visible(False)
     loading_screen()
     game = Game()
     game.game_loop()

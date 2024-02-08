@@ -19,6 +19,13 @@ class Mission:
             or self.heavy_escorts_sunk > 0 \
             or self.neutral_freighters_sunk > 0
 
+    def accomplished_something(self) -> bool:
+        return self.freighters_sunk > 0 \
+            or self.escorts_sunk > 0 \
+            or self.subs_sunk > 0 \
+            or self.heavy_escorts_sunk > 0 \
+            or self.neutral_freighters_sunk > 0
+
 class ConvoyAttack(Mission):
     def __init__(self, scale, subs, heavy_escort, offmap_asw, neutral_freighters):
         super().__init__()

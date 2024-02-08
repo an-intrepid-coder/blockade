@@ -349,7 +349,7 @@ class PatrolPlane(TacticalEntity):
         self.abilities = [
             Radar(), 
             ToggleSpeed(),
-            ShortRangeTorpedo(),
+            ShortRangeTorpedo(ammo=PATROL_PLANE_TORP_AMMO),
             DropSonobuoy(ammo=PATROL_PLANE_SONOBUOY_AMMO),
         ] 
         self.alert_level = AlertLevel.ALERTED
@@ -399,7 +399,7 @@ class HeavyConvoyEscort(TacticalEntity):
         self.skills["radar"] = 16
         self.skills["stealth"] = 7
         self.skills["point defense"] = 12
-        self.skills["passive sonar"] = 13
+        self.skills["passive sonar"] = 14
         self.skills["torpedo"] = 15
         self.skills["active sonar"] = 14
         self.hp = {"current": 30, "max": 30} 

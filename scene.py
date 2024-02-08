@@ -599,6 +599,7 @@ class CampaignScene(Scene):
         self.displaying_shipping_heat_map = True
         self.displaying_danger_points_heat_map = True
         self.had_encounter = False
+        self.accomplished_something = False
 
     def generate_campaign(self):
         self.tilemap = TileMap(CAMPAIGN_MAP_SIZE, "campaign")
@@ -632,6 +633,7 @@ class CampaignScene(Scene):
         self.active_front_tiles = []
         self.next_front_shift = 0
         self.map_danger_points = self.djikstra_map_danger_points() 
+        self.map_fronts = self.map_front_lines()
 
     def sim_event_increase_danger_zone(self):
         tile = self.tilemap.get_tile(self.player.xy_tuple)
@@ -661,6 +663,24 @@ class CampaignScene(Scene):
                 traffic_points = len(list(filter(lambda z: z.sea_route_node or z.logistical_sea_route, neighbors)))
                 djikstra_map[x].append(traffic_points)
         return djikstra_map
+
+    def map_front_lines(self) -> list:
+        w, h = self.tilemap.wh_tuple
+        front_map = [] 
+        for x in range(w):
+            front_map.append([])
+            for y in range(h):
+                tile = self.tilemap.get_tile((x, y))
+                neighbors = self.tilemap.neighbors_of((x, y))
+                allied_front = tile.faction == "allied" and any(map(lambda x: x.faction == "enemy", neighbors))
+                enemy_front = tile.faction == "enemy" and any(map(lambda x: x.faction == "allied", neighbors))
+                if allied_front:
+                    front_map[x].append("allied")
+                elif enemy_front:
+                    front_map[x].append("enemy")
+                else:
+                    front_map[x].append(False)
+        return front_map
 
     def djikstra_map_danger_points(self) -> list:
         w, h = self.tilemap.wh_tuple
@@ -764,9 +784,9 @@ class CampaignScene(Scene):
 
     def sim_event_asw_encounter(self, danger_points, traffic_points):
         if danger_points > 20:
-            scale = 2
+            scale = 3
         else: 
-            scale = 1
+            scale = 2
         mission = AswPatrol(scale, self.encounter_has_offmap_asw(self.player.xy_tuple, traffic_points))
         self.game.scene_tactical_combat = TacticalScene(self.game, mission)
         self.game.current_scene = self.game.scene_tactical_combat
@@ -826,6 +846,10 @@ class CampaignScene(Scene):
             self.map_danger_points = self.djikstra_map_danger_points()
             self.had_encounter = False
             self.display_changed = True
+            if self.tilemap.get_tile(self.player.xy_tuple) in self.mission_tiles and self.accomplished_something:
+                self.game.total_score += SCORE_MISSION_ZONE
+                self.push_to_console("+{} points for activity in mission zone.".format(SCORE_MISSION_ZONE))
+            self.accomplished_something = False
         if turn_ready():
             self.observation_index = 0
             self.game.exit_game_confirm = False
@@ -839,6 +863,7 @@ class CampaignScene(Scene):
             self.sim_event_repair_check()
             self.sim_event_extra_lives_check() 
             self.sim_event_danger_points_check()
+            self.map_fronts = self.map_front_lines()
             if not self.player_long_wait:
                 self.update_mini_map() 
                 self.player_turn_ended = False
@@ -894,8 +919,6 @@ class CampaignScene(Scene):
                     target.faction = "allied"
                     if target.tile_type == "city":
                         self.push_to_console("Allied forces take city at {}!".format(target.xy_tuple))
-                    else:
-                        self.push_to_console("Allied forces take ground at {}!".format(target.xy_tuple))
                     self.active_front_tiles.append(target)
             if len(targets) == 0:
                 self.active_front_tiles = []
@@ -984,7 +1007,7 @@ class CampaignScene(Scene):
             self.tilemap.neighbors_of(self.player.xy_tuple)) is not None
         needs_ammo = self.player.torps < PLAYER_DEFAULT_TORPS or self.player.missiles < PLAYER_DEFAULT_MISSILES
         if (resupply_ship_in_range or next_to_city) and needs_ammo:
-            if resupply_ship:
+            if resupply_ship_in_range:
                 source = "resupply vessel"
             elif next_to_city:
                 source = "friendly port"
@@ -1148,6 +1171,7 @@ class CampaignScene(Scene):
         for x in range(topleft[0], topleft[0] + self.screen_wh_cells_tuple[0]):
             for y in range(topleft[1], topleft[1] + self.screen_wh_cells_tuple[1]):
                 rect = (count_x * CELL_SIZE, count_y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                center = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
                 relative_positions[str((x, y))] = rect
                 if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
                     tile = self.tilemap.get_tile((x, y))
@@ -1168,8 +1192,15 @@ class CampaignScene(Scene):
                             self.screen.blit(surf, (rect[0], rect[1]))
                     elif tile.tile_type == "land":
                         pygame.draw.rect(self.screen, "olive", rect) 
+                        if self.map_fronts[x][y] == "allied":
+                            img = unit_tile_circle(faction_to_color["allied"])
+                            self.screen.blit(img, (rect[0], rect[1]))
+                        elif self.map_fronts[x][y] == "enemy":
+                            img = unit_tile_circle(faction_to_color["enemy"])
+                            self.screen.blit(img, (rect[0], rect[1]))
                     elif tile.tile_type == "city":
                         pygame.draw.rect(self.screen, faction_to_color[tile.faction], rect) 
+                        pygame.draw.rect(self.screen, "black", rect, 6) 
                 else:
                     pygame.draw.rect(self.screen, "black", rect)
                 if grid_lines:
@@ -1562,6 +1593,8 @@ class TacticalScene(Scene):
             self.game.scene_campaign_map.player.missiles = self.player.get_ability("missile").ammo
             if self.mission.danger_increased():
                 self.game.scene_campaign_map.sim_event_increase_danger_zone()
+            if self.mission.accomplished_something():
+                self.game.scene_campaign_map.accomplished_something = True
             return True
         return False
 
@@ -1885,7 +1918,8 @@ class TacticalScene(Scene):
 
     def ended_mission(self) -> bool:
         if pygame.key.get_pressed()[K_e] and self.ctrl_pressed():
-            can_end_mission = not self.player_being_hunted()
+            can_end_mission = not self.player_being_hunted() \
+                and len(self.player.torpedos_incoming + self.player.missiles_incoming) == 0
             if self.mission_over_confirm and can_end_mission:
                 self.mission_over = True
                 self.game.total_score += self.mission.calculate_score(self.player.hp["current"])
@@ -2571,12 +2605,16 @@ class TacticalScene(Scene):
 
     def incoming_torp_alert(self):
         incoming = 0
+        etas = []
         for torp in self.player.known_torpedos():
             if not torp.gui_alert:
                 incoming += 1
                 torp.gui_alert = True
+                etas.append(torp.eta)
         if incoming > 0:
             self.push_to_console("{} NEW INCOMING TORPEDOS(s)!".format(incoming), tag="combat")
+        for eta in etas:
+            self.push_to_console("Incoming eta: {}".format(eta), tag="combat")
 
     def chase_check(self): 
         def chasers_by_distance(units) -> list:
