@@ -42,6 +42,9 @@ class Entity:
         self.id = Entity.entities
         Entity.entities += 1
         self.image = None
+        self.image_unidentified = None
+        self.image_zoomed_out = None
+        self.image_zoomed_out_unidentified = None
         self.can_land_move = False
         self.can_ocean_move = False
         self.can_air_move = False
@@ -87,6 +90,7 @@ class PlayerCampaignEntity(CampaignEntity):
         super().__init__(xy_tuple, "allied")
         self.name = "PLAYER" # NOTE: temporary value
         self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
+        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True, small=True)
         self.can_ocean_move = True
         self.player = True
         if debug:
@@ -218,6 +222,7 @@ class PlayerSub(TacticalEntity):
     def __init__(self, xy_tuple, campaign_entity): 
         super().__init__(xy_tuple, "allied")
         self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
+        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True, small=True)
         self.can_ocean_move = True
         self.name = campaign_entity.name
         self.player = True
@@ -250,6 +255,9 @@ class EscortSub(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
+        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True, small=True)
+        self.image_unidentified = unit_tile_triangle("dark gray", upsidedown=True)
+        self.image_unidentified_zoomed_out = unit_tile_triangle("dark gray", upsidedown=True, small=True)
         self.name = "escort sub"  
         self.can_ocean_move = True
         self.abilities = [
@@ -276,6 +284,9 @@ class Freighter(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_circle(faction_to_color[self.faction])
+        self.image_zoomed_out = unit_tile_circle(faction_to_color[self.faction], small=True)
+        self.image_unidentified = unit_tile_circle("dark gray")
+        self.image_unidentified_zoomed_out = unit_tile_circle("dark gray", small=True)
         self.name = "freighter" 
         self.can_ocean_move = True
         # NOTE: tentative values below
@@ -293,6 +304,7 @@ class Sonobuoy(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_circle(faction_to_color[self.faction], hollow=True)
+        self.image_zoomed_out = unit_tile_circle(faction_to_color[self.faction], hollow=True, small=True)
         self.name = "sonobuoy" 
         self.identified = True
         self.can_ocean_move = True
@@ -310,6 +322,9 @@ class SmallConvoyEscort(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction])
+        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], small=True)
+        self.image_unidentified = unit_tile_circle("dark gray")
+        self.image_unidentified_zoomed_out = unit_tile_circle("dark gray", small=True)
         self.name = "small convoy escort" 
         self.can_ocean_move = True
         # NOTE: tentative values below
@@ -336,6 +351,9 @@ class PatrolPlane(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_cross(faction_to_color[self.faction])
+        self.image_zoomed_out = unit_tile_cross(faction_to_color[self.faction], small=True)
+        self.image_unidentified = unit_tile_cross("dark gray")
+        self.image_unidentified_zoomed_out = unit_tile_cross("dark gray", small=True)
         self.name = "patrol plane" 
         self.can_ocean_move = True
         self.can_air_move = True
@@ -360,6 +378,9 @@ class PatrolHelicopter(TacticalEntity):
     def __init__(self, xy_tuple, faction, mothership, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_cross(faction_to_color[self.faction])
+        self.image_zoomed_out = unit_tile_cross(faction_to_color[self.faction], small=True)
+        self.image_unidentified = unit_tile_cross("dark gray")
+        self.image_unidentified_zoomed_out = unit_tile_cross("dark gray", small=True)
         self.name = "patrol helicopter" 
         self.can_ocean_move = True
         self.can_air_move = True
@@ -390,6 +411,9 @@ class HeavyConvoyEscort(TacticalEntity):
     def __init__(self, xy_tuple, faction, direction=None, formation=None):
         super().__init__(xy_tuple, faction, direction=direction, formation=formation)
         self.image = unit_tile_triangle(faction_to_color[self.faction])
+        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], small=True)
+        self.image_unidentified = unit_tile_circle("dark gray")
+        self.image_unidentified_zoomed_out = unit_tile_circle("dark gray", small=True)
         self.name = "heavy convoy escort" 
         self.can_ocean_move = True
         # NOTE: highly tentative values below

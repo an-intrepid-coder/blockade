@@ -10,8 +10,11 @@ def loading_screen():
     surf = pygame.Surface(desktop_size)
     surf.fill("navy")
     lines = [
-        title_font.render("BLOCKADE", True, "white"),
+        title_font.render("BLOCKADE", True, "white", "black"),
+        title_font.render("", True, "white", "black"),
         subtitle_font.render("<version {}>".format(VERSION), True, "white", "black"),
+        title_font.render("", True, "white", "black"),
+        title_font.render("", True, "white", "black"),
         subtitle_font.render("~-~-~-~-~-~-~-___SECTOR 34 GAMES___~-~-~-~-~-~-~-", True, "white", "black"),
         subtitle_font.render("...loading...".format(VERSION), True, "white", "black"),
         subtitle_font.render("~-~-~-~-<roguelike + subsim = awesome>~-~-~-~-~-~", True, "white", "black"),

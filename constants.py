@@ -1,6 +1,9 @@
 from os import path
 from pygame.locals import *
 
+STARTING_SUBS = 100
+STARTING_HEAVY_ESCORTS = 3
+
 SMALL_CONVOY_ESCORTS_PER_SCALE = (2, 4)
 SMALL_CONVOY_ESCORT_CHASERS_PER_SCALE = 1 # tentative
 ESCORT_SUBS_PER_SCALE = (1, 3)
@@ -56,15 +59,15 @@ DEFAULT_MISSILE_AMMO = 8
 PATROL_PLANE_SONOBUOY_AMMO = 30 # tentative
 
 SONOBUOY_DIFFUSION_RANGE = PASSIVE_SONAR_RANGE - 3
-DEFAULT_SONOBUOY_AMMO = 10 # tentative
-DROP_SONOBUOY_TARGET = 8 # tentative
+DEFAULT_SONOBUOY_AMMO = 10 
+DROP_SONOBUOY_TARGET = 8 
 
-OFFMAP_ASW_ETA_RANGE = (200, 600) # tentative
-INVASION_ETA_RANGE = (600, 1000) # tentative
+OFFMAP_ASW_ETA_RANGE = (200, 600) 
+INVASION_ETA_RANGE = (600, 1000) 
 WARSIM_TILE_CREEP_FREQUENCY_RANGE_ISLAND = 100
 WARSIM_TILE_CREEP_FREQUENCY_RANGE_MAINLAND = 50
 
-MISSION_RADIUS = 10 # tentative
+MISSION_RADIUS = 12 
 
 # NOTE: this will eventually vary by ship type.
 MOMENTUM_CAP = 6
@@ -74,6 +77,7 @@ FAST_MODE_BONUS = 2
 VERSION = "0.0.0"
 
 FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Regular.ttf"))
+BOLD_FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Bold.ttf"))
 WINDOW_ICON_PATH = path.abspath(path.join(path.dirname(__file__), "./window_icon.png"))
 
 FPS = 60

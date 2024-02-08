@@ -24,6 +24,7 @@ class Scene:
         self.pathfinding_perf = game.pathfinding_perf
         self.screen = game.screen
         self.screen_wh_cells_tuple = game.screen_wh_cells_tuple
+        self.screen_wh_cells_tuple_zoomed_out = game.screen_wh_cells_tuple_zoomed_out
         self.tilemap = None
         self.camera = (0, 0)
         self.entities = []
@@ -31,6 +32,7 @@ class Scene:
         self.displaying_hud = True 
         self.console_scrolled_up_by = 0 
         self.hud_font = pygame.font.Font(FONT_PATH, HUD_FONT_SIZE)
+        self.hud_font_bold = pygame.font.Font(BOLD_FONT_PATH, HUD_FONT_SIZE)
         self.observation_index = 0
         self.time_units_passed = 0
         self.player_turn = 0
@@ -144,8 +146,8 @@ class Scene:
                         MM_CELL_SIZE) 
                     color = faction_to_color[entity.faction]
                     pygame.draw.rect(surf, color, rect)
-        pygame.draw.rect(surf, "green", (0, 0, surf.get_width(), surf.get_height()), 1)
         self.mini_map = pygame.transform.scale(surf, MINI_MAP_SIZE)
+        pygame.draw.rect(self.mini_map, "green", (0, 0, MINI_MAP_SIZE[0], MINI_MAP_SIZE[1]), 1)
 
     # Gets the shortest available route     
     def shortest_path(self, start_loc, end_loc, djikstra_map, valid_tile_types=["ocean"]) -> list:   
@@ -283,24 +285,31 @@ class Scene:
         return self.processing
 
     def get_tail_point(self, entity, center) -> tuple:
+        if isinstance(self, TacticalScene):
+            if self.zoomed_out:
+                cell_size = ZOOMED_OUT_CELL_SIZE
+            else:
+                cell_size = CELL_SIZE
+        else:
+            cell_size = CELL_SIZE
         if entity.last_direction == "wait":
             x, y = center
         elif entity.last_direction == "up":
-            x, y = center[0], center[1] + CELL_SIZE // 2
+            x, y = center[0], center[1] + cell_size // 2
         elif entity.last_direction == "down":
-            x, y = center[0], center[1] - CELL_SIZE // 2
+            x, y = center[0], center[1] - cell_size // 2
         elif entity.last_direction == "left":
-            x, y = center[0] + CELL_SIZE // 2, center[1]
+            x, y = center[0] + cell_size // 2, center[1]
         elif entity.last_direction == "right":
-            x, y = center[0] - CELL_SIZE // 2, center[1]
+            x, y = center[0] - cell_size // 2, center[1]
         elif entity.last_direction == "upright":
-            x, y = center[0] - CELL_SIZE // 2, center[1] + CELL_SIZE // 2
+            x, y = center[0] - cell_size // 2, center[1] + cell_size // 2
         elif entity.last_direction == "upleft":
-            x, y = center[0] + CELL_SIZE // 2, center[1] + CELL_SIZE // 2
+            x, y = center[0] + cell_size // 2, center[1] + cell_size // 2
         elif entity.last_direction == "downright":
-            x, y = center[0] - CELL_SIZE // 2, center[1] - CELL_SIZE // 2
+            x, y = center[0] - cell_size // 2, center[1] - cell_size // 2
         elif entity.last_direction == "downleft":
-            x, y = center[0] + CELL_SIZE // 2, center[1] - CELL_SIZE // 2
+            x, y = center[0] + cell_size // 2, center[1] - cell_size // 2
         return (x, y)
 
     def draw_big_splash(self, surf):
@@ -359,6 +368,7 @@ class Scene:
                     or self.console_scrolled() \
                     or self.escape_pressed() \
                     or self.cycle_target() \
+                    or self.toggled_zoom() \
                     or self.fire_at_target() \
                     or self.toggled_hud() \
                     or self.used_ability() \
@@ -380,6 +390,14 @@ class Scene:
                 or self.toggled_danger_points_heat_map() \
                 or self.help_button_pressed() \
                 or self.exited_game() 
+
+    def toggled_zoom(self) -> bool:
+        if pygame.key.get_pressed()[K_z]:
+            self.zoomed_out = not self.zoomed_out
+            self.display_changed = True
+            self.push_to_console("Zoomed Out: {}".format(self.zoomed_out))
+            return True
+        return False
 
     def toggled_shipping_heat_map(self) -> bool: 
         if pygame.key.get_pressed()[K_s] and self.shift_pressed():
@@ -414,7 +432,8 @@ class Scene:
                 "[TAB]: cycle targets in view", "",
                 "[shift + period]: long wait (100 TU)", "",
                 "[m]: mini map", "",
-                "[r[: briefing", "",
+                "[r]: briefing", "",
+                "[z]: toggle zoomed in/out", "",
                 "[ctrl + q]: quit game", "",
                 "[ctrl + e]: end mission", "",
                 "[ctrl + w]: swap hud placement", "",
@@ -600,6 +619,8 @@ class CampaignScene(Scene):
         self.displaying_danger_points_heat_map = True
         self.had_encounter = False
         self.accomplished_something = False
+        self.player_in_mission_zone = False
+        self.displaying_final_splash = False
 
     def generate_campaign(self):
         self.tilemap = TileMap(CAMPAIGN_MAP_SIZE, "campaign")
@@ -841,12 +862,16 @@ class CampaignScene(Scene):
                 and self.game.current_scene is self
         def encounter_post():
             return self.had_encounter and self.game.current_scene is self
+        if self.displaying_final_splash:
+            return
         self.game_over_check()
         if encounter_post():
+            self.game.encounters_had += 1
             self.map_danger_points = self.djikstra_map_danger_points()
             self.had_encounter = False
             self.display_changed = True
             if self.tilemap.get_tile(self.player.xy_tuple) in self.mission_tiles and self.accomplished_something:
+                self.game.encounters_accomplished_something += 1
                 self.game.total_score += SCORE_MISSION_ZONE
                 self.push_to_console("+{} points for activity in mission zone.".format(SCORE_MISSION_ZONE))
             self.accomplished_something = False
@@ -919,16 +944,19 @@ class CampaignScene(Scene):
                     target.faction = "allied"
                     if target.tile_type == "city":
                         self.push_to_console("Allied forces take city at {}!".format(target.xy_tuple))
+                        self.game.cities_conquered += 1
                     self.active_front_tiles.append(target)
             if len(targets) == 0:
+                if self.phase == "island":
+                    self.game.islands_conquered += 1
                 self.active_front_tiles = []
                 self.invasion_target = self.select_invasion_target()
                 self.invasion_eta = self.get_invasion_eta()
                 self.briefing_splash = self.generate_big_splash_txt_surf(self.generate_invasion_brief_txt_lines())
+                self.mission_tiles = self.get_mission_tiles()
                 self.displaying_briefing_splash = True
                 resupply_ship = first(lambda x: x.name == "resupply vessel", self.entities)
                 if resupply_ship is not None:
-                    self.push_to_console("ping")
                     self.tilemap.toggle_occupied(resupply_ship.xy_tuple)
                     if resupply_ship in self.entities:
                         self.entities.remove(resupply_ship)
@@ -955,15 +983,34 @@ class CampaignScene(Scene):
         if game_over:
             lines = [
                 "Total Score: {}".format(self.game.total_score), "",
-                # TODO: more here
+                "___ASSORTED STATISTICS___",
+                "Freighters Sunk: {}".format(self.game.freighters_sunk),
+                "Small Escorts Sunk: {}".format(self.game.escorts_sunk),
+                "Escort Subs Sunk: {} / {}".format(self.game.subs_sunk, STARTING_SUBS),
+                "Heavy Escorts Sunk: {} / {}".format(self.game.heavy_escorts_sunk, STARTING_HEAVY_ESCORTS),
+                "Neutral Freighters Sunk: {}".format(self.game.neutral_freighters_sunk),
+                "Encounters: {}".format(self.game.encounters_had),
+                "Encounters w/ Retained Stealth: {}".format(self.game.encounters_retained_stealth),
+                "Meaningful Encounters: {}".format(self.game.encounters_accomplished_something),
+                "Meaningful Encounters w/ Retained Stealth: {}".format(self.game.encounters_accomplished_something_retained_stealth),
+                "Times Pursuers Evaded: {}".format(self.game.times_lost_hunters),
+                "Islands Taken: {}".format(self.game.islands_conquered),
+                "Cities/Ports Taken: {}".format(self.game.cities_conquered),
+                "Total Damage Sustained (includes overkill): {}".format(self.game.total_damage_taken),
+                "Torpedos Evaded: {}".format(self.game.torpedos_evaded),
+                "Torpedos Used: {}".format(self.game.torpedos_used),
+                "Missiles Used: {}".format(self.game.missiles_used),
+                "Times Resupplied: {}".format(self.game.times_resupplied),
+                "Extra Lives Used: {}".format(self.game.extra_lives_used),
             ]
-            if self.extra_lives > 0:
+            if self.extra_lives > 0 and self.player.hp["current"] <= 0:
                 lines.append("> Un-used extra lives, since no ports were taken.")
             splash_lines = [title_line, ""] + lines + ["", "<ESC to continue>"]
             self.game_over_splash = self.generate_big_splash_txt_surf(splash_lines) 
             self.game_over = True
             self.player_turn_ended = True
             self.display_changed = True
+            self.displaying_final_splash = True
 
     def sim_event_player_respawn(self) -> bool:
         allied_ports = list(filter(lambda x: x.tile_type == "city" and x.faction == "allied" and x.coast, \
@@ -983,6 +1030,8 @@ class CampaignScene(Scene):
             self.push_to_console("short period of recovery, you've been")
             self.push_to_console("given a new vessel.")
             self.extra_lives -= 1
+            self.game.extra_lives_used += 1
+            self.update_mini_map()
             return True
 
     def sim_event_repair_check(self):
@@ -1014,6 +1063,7 @@ class CampaignScene(Scene):
             self.player.torps = PLAYER_DEFAULT_TORPS
             self.player.missiles = PLAYER_DEFAULT_MISSILES
             self.push_to_console("Fresh ammo from {}!".format(source))
+            self.game.times_resupplied += 1
 
     def move_entity(self, entity, direction) -> bool:
         target_xy_tuple = (
@@ -1039,6 +1089,14 @@ class CampaignScene(Scene):
             return True
         # valid movement
         elif self.entity_can_move(entity, direction):
+            if isinstance(self, CampaignScene) and entity.player:
+                mission_zone = list(map(lambda x: x.xy_tuple, self.mission_tiles))
+                if not self.player_in_mission_zone and target_xy_tuple in mission_zone:
+                    self.push_to_console("Entering Mission Zone")
+                    self.player_in_mission_zone = True
+                elif self.player_in_mission_zone and target_xy_tuple not in mission_zone:
+                    self.push_to_console("Leaving Mission Zone")
+                    self.player_in_mission_zone = False
             self.tilemap.toggle_occupied(entity.xy_tuple)
             self.tilemap.toggle_occupied(target_xy_tuple)
             entity.xy_tuple = target_xy_tuple
@@ -1251,6 +1309,7 @@ class TacticalScene(Scene):
         self.mission_over_splash = None
         self.briefing_splash = self.generate_big_splash_txt_surf(mission.briefing_lines)
         self.starting_damage = self.player.hp["max"] - self.player.hp["current"]
+        self.zoomed_out = False
 
     def generate_encounter(self, mission):
         player_origin = (MAP_SIZE[0] // 2, MAP_SIZE[1] // 2) 
@@ -1595,6 +1654,10 @@ class TacticalScene(Scene):
                 self.game.scene_campaign_map.sim_event_increase_danger_zone()
             if self.mission.accomplished_something():
                 self.game.scene_campaign_map.accomplished_something = True
+                if self.mission.stealth_retained:
+                    self.game.encounters_accomplished_something_retained_stealth += 1
+            if self.mission.stealth_retained:
+                self.game.encounters_retained_stealth += 1
             return True
         return False
 
@@ -1624,6 +1687,8 @@ class TacticalScene(Scene):
         launcher.raise_alert_level(AlertLevel.ENGAGED)
         launched = self.skill_check_launch_missile(launcher)
         if launched <= 0:
+            if launcher.player:
+                self.game.missiles_used += 1
             # detection:
             for entity in list(filter(lambda x: x.faction != launcher.faction, self.entities)):
                 if entity.can_detect_incoming_missiles():
@@ -1658,6 +1723,8 @@ class TacticalScene(Scene):
         launcher.raise_alert_level(AlertLevel.ENGAGED)
         launched = self.skill_check_launch_torpedo(launcher)
         if launched <= 0:
+            if launcher.player:
+                self.game.torpedos_used += 1
             is_known = False
             # target detection:
             if target.can_detect_incoming_torpedos():
@@ -1764,6 +1831,8 @@ class TacticalScene(Scene):
             else:
                 msg = "{}'s torpedo miss vs. {}!".format(launcher.name, target.name)
             self.push_to_console_if_player(msg, [launcher, target], tag="combat")
+            if target.player:
+                self.game.torpedos_evaded += 1
         elif not target.dead:
             target.raise_alert_level(AlertLevel.ENGAGED)
             dmg = roll_torpedo_damage()
@@ -1773,6 +1842,7 @@ class TacticalScene(Scene):
                 dmg_msg = "{} destroyed by torpedo!".format(target.name, dmg)
                 if target.player:
                     self.mission.player_fate = "Destroyed by {}'s torpedo!".format(launcher.name)
+                    self.game.total_damage_taken += dmg
             else:
                 dmg_msg = "{} takes {} damage from a torpedo! ({} / {})".format(target.name, dmg, \
                     target.hp["current"], target.hp["max"])
@@ -1987,6 +2057,9 @@ class TacticalScene(Scene):
                 self.entity_ai_random_move(entity)
             if chebyshev_distance(entity.xy_tuple, self.player_last_known_xy) <= 1:
                 entity.chasing = False
+                none_chasing = len(list(filter(lambda x: x.faction == "enemy" and not x.chasing, self.entities))) == 0
+                if none_chasing:
+                    self.game.times_lost_hunters += 1
             return True
         return False
 
@@ -2379,14 +2452,19 @@ class TacticalScene(Scene):
                 if entity.name == "freighter":
                     if entity.faction == "neutral":
                         self.mission.neutral_freighters_sunk += 1
+                        self.game.neutral_freighters_sunk += 1
                     else:
                         self.mission.freighters_sunk += 1
+                        self.game.freighters_sunk += 1
                 elif entity.name == "small convoy escort":
                     self.mission.escorts_sunk += 1
+                    self.game.escorts_sunk += 1
                 elif entity.name == "escort sub":
                     self.mission.subs_sunk += 1
+                    self.game.subs_sunk += 1
                 elif entity.name == "heavy convoy escort":
                     self.mission.heavy_escorts_sunk += 1
+                    self.game.heavy_escorts_sunk += 1
         if self.player not in self.entities:
             self.mission_over = True 
             self.display_changed = True
@@ -2486,15 +2564,22 @@ class TacticalScene(Scene):
         self.screen.blit(abilities_surface, (0, y)) 
 
     def draw_level(self, grid_lines=True):
-        topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, \
-            self.camera[1] - self.screen_wh_cells_tuple[1] // 2)
         relative_positions = {}
-
+        if self.zoomed_out:
+            cell_range_limit_x = self.screen_wh_cells_tuple_zoomed_out[0]
+            cell_range_limit_y = self.screen_wh_cells_tuple_zoomed_out[1]
+            cell_size = ZOOMED_OUT_CELL_SIZE
+        else:
+            cell_range_limit_x = self.screen_wh_cells_tuple[0]
+            cell_range_limit_y = self.screen_wh_cells_tuple[1]
+            cell_size = CELL_SIZE
+        topleft = (self.camera[0] - cell_range_limit_x // 2, \
+            self.camera[1] - cell_range_limit_y // 2)
         # draw tilemap
         count_x, count_y = 0, 0 
-        for x in range(topleft[0], topleft[0] + self.screen_wh_cells_tuple[0]):
-            for y in range(topleft[1], topleft[1] + self.screen_wh_cells_tuple[1]):
-                rect = (count_x * CELL_SIZE, count_y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+        for x in range(topleft[0], topleft[0] + cell_range_limit_x):
+            for y in range(topleft[1], topleft[1] + cell_range_limit_y):
+                rect = (count_x * cell_size, count_y * cell_size, cell_size, cell_size)
                 relative_positions[str((x, y))] = rect
                 if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
                     tile = self.tilemap.get_tile((x, y))
@@ -2503,14 +2588,14 @@ class TacticalScene(Scene):
                         sonar_layers = self.map_enemy_sonar_overlay[x][y]
                         if sonar_layers > 0:
                             alpha = OVERLAY_ALPHA_BASE + OVERLAY_ALPHA_INC * sonar_layers
-                            surf = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
+                            surf = pygame.Surface((cell_size, cell_size), flags=SRCALPHA)
                             surf.fill(ENEMY_SONAR_OVERLAY_COLOR + [alpha])
                             self.screen.blit(surf, (rect[0], rect[1]))
                     elif tile.tile_type == "land":
                         pygame.draw.rect(self.screen, "olive", rect)
                 else:
                     pygame.draw.rect(self.screen, "black", rect)
-                if grid_lines:
+                if grid_lines and not self.zoomed_out:
                     pygame.draw.rect(self.screen, "gray", rect, 1)
                 count_y += 1
             count_x += 1
@@ -2556,35 +2641,46 @@ class TacticalScene(Scene):
                     or entity.identified \
                     or self.debug \
                     or (contact is not None and contact.acc >= CONTACT_ACC_ID_THRESHOLD): 
-                    img = entity.image
+                    if self.zoomed_out:
+                        img = entity.image_zoomed_out
+                    else:
+                        img = entity.image
                     if not entity.identified:
                         entity.identified = True
                         if not entity.player:
                             self.push_to_console("{} identified".format(entity.name))
-                elif entity.submersible:
-                    img = unit_tile_triangle("dark gray", upsidedown=True)
                 else:
-                    img = unit_tile_circle("dark gray")
+                    if self.zoomed_out:
+                        img = entity.image_unidentified_zoomed_out
+                    else:
+                        img = entity.image_unidentified
                 self.screen.blit(img, rect)
-                if not entity.identified and self.overlay_sonar:
-                    acc_txt = self.hud_font.render("{}".format(contact.acc), "black", True, "white")
-                    pos = (rect[0] + CELL_SIZE // 2 - acc_txt.get_width() // 2,
-                           rect[1] + CELL_SIZE // 2 - acc_txt.get_height() // 2)
-                    self.screen.blit(acc_txt, pos)
                 # a "tail" showing direction came from:
-                target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
+                target = (rect[0] + cell_size // 2, rect[1] + cell_size // 2)
                 tail_point = self.get_tail_point(entity, target) 
                 pygame.draw.line(self.screen, "white", target, tail_point, 2) 
                 # marker if currently targeted by a player weapon: 
                 torps = list(map(lambda x: x.launcher.player, entity.torpedos_incoming))
                 missiles = list(map(lambda x: x.launcher.player, entity.missiles_incoming))
                 if any(torps + missiles):
-                    pygame.draw.circle(self.screen, COLOR_MISSION_HIGHLIGHT, target, int(CELL_SIZE * .66), 4)
+                    pygame.draw.circle(self.screen, COLOR_MISSION_HIGHLIGHT, target, int(cell_size * .66), 4)
                 # reticule if camera on AI unit:
                 if entity.xy_tuple == self.camera and not entity.player:
                     target_cell = relative_positions[str(self.camera)]
-                    target = (target_cell[0] + CELL_SIZE // 2, target_cell[1] + CELL_SIZE // 2)
-                    pygame.draw.circle(self.screen, "cyan", target, int(CELL_SIZE * .66), 2)
+                    target = (target_cell[0] + cell_size // 2, target_cell[1] + cell_size // 2)
+                    pygame.draw.circle(self.screen, "cyan", target, int(cell_size * .66), 2)
+                # acc rating
+                if not entity.identified and self.overlay_sonar:
+                    if contact.acc < 50:
+                        color = "red"
+                    elif contact.acc < 80:
+                        color = "yellow"
+                    else:
+                        color = "green"
+                    acc_txt = self.hud_font_bold.render("{}".format(contact.acc), True, color, "black")
+                    pos = (rect[0] + cell_size // 2 - acc_txt.get_width() // 2,
+                           rect[1] + cell_size // 2 - acc_txt.get_height() // 2)
+                    self.screen.blit(acc_txt, pos)
 
     def djikstra_map_enemy_sonar(self) -> list:
         djikstra_map = [[0 for y in range(self.tilemap.wh_tuple[1])] for x in range(self.tilemap.wh_tuple[0])]

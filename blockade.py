@@ -10,6 +10,8 @@ class Game:
         self.running = True
         self.screen = pygame.display.get_surface() 
         self.screen_wh_cells_tuple = (self.screen.get_width() // CELL_SIZE, self.screen.get_height() // CELL_SIZE)
+        self.screen_wh_cells_tuple_zoomed_out = (self.screen.get_width() // ZOOMED_OUT_CELL_SIZE, \
+            self.screen.get_height() // ZOOMED_OUT_CELL_SIZE)
         self.screen.set_colorkey(ALPHA_KEY)
         self.clock = pygame.time.Clock()
         self.debug = False
@@ -21,9 +23,27 @@ class Game:
         self.current_scene = self.scene_campaign_map 
         self.exit_game_confirm = False
         self.campaign_mode = True
-        self.heavy_escorts = 3
-        self.subs = 100
+        self.heavy_escorts = STARTING_HEAVY_ESCORTS
+        self.subs = STARTING_SUBS
         self.total_score = 0
+        self.freighters_sunk = 0
+        self.escorts_sunk = 0
+        self.subs_sunk = 0
+        self.heavy_escorts_sunk = 0
+        self.neutral_freighters_sunk = 0
+        self.encounters_had = 0
+        self.encounters_retained_stealth = 0
+        self.encounters_accomplished_something = 0
+        self.encounters_accomplished_something_retained_stealth = 0
+        self.times_lost_hunters = 0
+        self.islands_conquered = 0
+        self.cities_conquered = 0
+        self.total_damage_taken = 0
+        self.torpedos_evaded = 0
+        self.torpedos_used = 0
+        self.missiles_used = 0
+        self.times_resupplied = 0
+        self.extra_lives_used = 0
 
     def game_loop(self):
         while self.running: 
