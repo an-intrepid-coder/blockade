@@ -56,6 +56,10 @@ class Entity:
         self.speed_mode = "normal"
         self.momentum = 0
         self.last_direction = "wait"
+        self.next_ability_time = 0
+
+    def on_cooldown(self, tu_passed):
+        return self.next_ability_time > tu_passed
 
     def is_mobile(self):
         # NOTE: this is used in the torpedo detection/evasion logic, so it should also account for things like
@@ -72,13 +76,20 @@ class Entity:
         elif self.speed_mode == "fast":
             self.speed_mode = "normal"
 
-    def change_hp(self, change):
+    def change_hp(self, change) -> int:
+        damage_taken = None
+        if change < 0:
+            damage_taken = abs(change)
         hp = self.hp["current"] + change
-        if hp < 0: hp = 0
-        elif hp > self.hp["max"]: hp = self.hp["max"]
+        if hp < 0: 
+            damage_taken -= abs(0 - hp)
+            hp = 0
+        elif hp > self.hp["max"]: 
+            hp = self.hp["max"]
         self.hp["current"] = hp
         if hp == 0:
             self.dead = True
+        return damage_taken
 
 class CampaignEntity(Entity):
     def __init__(self, xy_tuple, faction, hidden=False):
@@ -100,6 +111,7 @@ class PlayerCampaignEntity(CampaignEntity):
         self.speed = 30
         self.torps = PLAYER_DEFAULT_TORPS
         self.missiles = PLAYER_DEFAULT_MISSILES
+        self.orientation = "wait"
 
 class ResupplyVessel(CampaignEntity):
     def __init__(self, xy_tuple):
@@ -249,6 +261,7 @@ class PlayerSub(TacticalEntity):
         self.speed = campaign_entity.speed
         self.submersible = True
         self.abilities.sort(key=sort_keys.abilities)
+        self.orientation = "wait"
 
 class EscortSub(TacticalEntity):
     # NOTE: This represents a relatively weak submarine the player might encounter guarding convoys
@@ -363,7 +376,7 @@ class PatrolPlane(TacticalEntity):
         self.skills["radar"] = 16
         self.skills["torpedo"] = 14
         self.hp = {"current": 6, "max": 6} 
-        self.speed = 10
+        self.speed = 8
         self.abilities = [
             Radar(), 
             ToggleSpeed(),
@@ -390,7 +403,7 @@ class PatrolHelicopter(TacticalEntity):
         self.skills["radar"] = 15
         self.skills["torpedo"] = 14
         self.hp = {"current": 4, "max": 4} 
-        self.speed = 12 
+        self.speed = 10
         self.mothership = mothership
         self.map_to_mothership = None
         self.abilities = [

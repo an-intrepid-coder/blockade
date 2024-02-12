@@ -1,10 +1,9 @@
 # BLOCKADE 
 
-[![Early Prototype](screenshots/000_5t.jpg)](screenshots/000_5.jpg)
-[![Early Prototype](screenshots/000_6t.jpg)](screenshots/000_6.jpg)
-[![Early Prototype](screenshots/000_7t.jpg)](screenshots/000_7.jpg)
+[![Early Prototype](screenshots/000_8t.jpg)](screenshots/000_8.jpg)
+[![Early Prototype](screenshots/000_9t.jpg)](screenshots/000_9.jpg)
 
-**Status / Progress**: Currently the campaign is playable in its entirety, although a great many features have yet to be implemented. 
+**Status / Progress**: Currently the campaign is playable in its entirety, although a great many features have yet to be implemented. Most recently, I have transitioned the game from turn-based to real-time-pausable. Time compression and perhaps mouse controls will be incoming in the near future to make the most of the advantages gained by this. More mechanical features incoming soon, for sure.
 
 **Version**: 0.0.0
 

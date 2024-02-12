@@ -60,7 +60,7 @@ class ConvoyAttack(Mission):
             ])
         if neutral_freighters: 
             self.briefing_lines.extend(["> Neutral shipping in the area.", ""])
-        self.briefing_lines.append("<ESC to continue>")
+        self.briefing_lines.append("<ESC to continue (note: mission starts paused)>")
         self.scale = scale
         self.freighters = True
         self.escorts = True
@@ -140,7 +140,7 @@ class AswPatrol(Mission):
                 "They may drop lines of sonobuoys across the map.",
                 "",
             ])
-        self.briefing_lines.append("<ESC to continue>")
+        self.briefing_lines.append("<ESC to continue (note: mission starts paused)>")
         self.scale = scale
         self.freighters = False
         self.escorts = True

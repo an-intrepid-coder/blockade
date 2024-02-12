@@ -7,6 +7,11 @@ from mission import *
 
 class Game: 
     def __init__(self):
+        self.GAME_UPDATE_TICK_TACTICAL = pygame.event.custom_type()
+        self.GAME_UPDATE_TICK_CAMPAIGN = pygame.event.custom_type()
+        self.MISSION_OVER_CHECK_RESET_CONFIRM = pygame.event.custom_type()
+        self.MISSION_OVER_CHECK = pygame.event.custom_type()
+        self.QUIT_CHECK_RESET_CONFIRM = pygame.event.custom_type()
         self.running = True
         self.screen = pygame.display.get_surface() 
         self.screen_wh_cells_tuple = (self.screen.get_width() // CELL_SIZE, self.screen.get_height() // CELL_SIZE)
@@ -19,7 +24,7 @@ class Game:
         self.log_ai_routines = False
         self.pathfinding_perf = False
         self.scene_campaign_map = CampaignScene(self)
-        self.scene_tactical_combat = None 
+        self.scene_tactical_combat = TacticalScene(self)
         self.current_scene = self.scene_campaign_map 
         self.exit_game_confirm = False
         self.campaign_mode = True
@@ -44,13 +49,56 @@ class Game:
         self.missiles_used = 0
         self.times_resupplied = 0
         self.extra_lives_used = 0
+        self.perf_calls = False
+        self.perfing = { 
+            "total": 0,
+            "total campaign proc": 0,
+            "total tac proc": 0,
+        }
 
+    def perf_call(self, fn): 
+        start = pygame.time.get_ticks()
+        fn()
+        end = pygame.time.get_ticks()
+        tot = end - start
+        if fn not in self.perfing.keys():
+            self.perfing[fn] = {"cumulative": tot, "longest": tot, "shortest": tot}
+        else:
+            self.perfing[fn]["cumulative"] += tot
+            if tot < self.perfing[fn]["shortest"]:
+                self.perfing[fn]["shortest"] = tot
+            if tot > self.perfing[fn]["longest"]:
+                self.perfing[fn]["longest"] = tot
+        procs = list(map(lambda x: x[1], self.current_scene.processing_events.values()))
+        if fn in procs:
+            if isinstance(self.current_scene, TacticalScene):
+                self.perfing["total tac proc"] += tot
+            elif isinstance(self.current_scene, CampaignScene):
+                self.perfing["total campaign proc"] += tot
+ 
     def game_loop(self):
         while self.running: 
-            self.current_scene.update()
+            if self.perfing:
+               self.perf_call(self.current_scene.update)
+            else:
+                self.current_scene.update()
             if self.current_scene.display_changed:
-                self.current_scene.draw() 
+                if self.perfing:
+                    self.perf_call(self.current_scene.draw)
+                else:
+                    self.current_scene.draw() 
             self.clock.tick(FPS)
+        if self.perf_calls:
+            self.perfing["total"] = pygame.time.get_ticks()
+            print("____Perf Logs by Function:")
+            for k, v in self.perfing.items():
+                if k != "total" and k != "total campaign proc" and k != "total tac proc":
+                    print("\t{}".format(k))
+                    print("\t\t% of total time: {}%".format(v["cumulative"] / self.perfing["total"] * 100))
+                    print("\t\tshortest: {}".format(v["shortest"]))
+                    print("\t\tlongest: {}".format(v["longest"]))
+            print("\tcampaign proc: {}%".format(self.perfing["total campaign proc"] / self.perfing["total"] * 100))
+            print("\ttac proc: {}%".format(self.perfing["total tac proc"] / self.perfing["total"] * 100))
 
 if __name__ == "__main__":
     pygame.init()

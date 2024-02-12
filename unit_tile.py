@@ -10,7 +10,7 @@ def unit_tile_circle(color, hollow=False, small=False):
     image.set_colorkey(ALPHA_KEY)
     image.fill(ALPHA_KEY)
     if hollow:
-        pygame.draw.circle(image, color, (cell_size // 2, cell_size // 2), cell_size // 3, 2)
+        pygame.draw.circle(image, color, (cell_size // 2, cell_size // 2), cell_size // 3, 4)
     else:
         pygame.draw.circle(image, color, (cell_size // 2, cell_size // 2), cell_size // 3)
     return image

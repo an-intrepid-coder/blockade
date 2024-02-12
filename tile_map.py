@@ -412,6 +412,10 @@ class TileMap:
                 self.island_coastal_city_tiles, self.sea_route_end_nodes = geography_generators[geography_type](wh_tuple)
         else:
             self.tiles = geography_generators[geography_type](wh_tuple)
+        self.changed_tiles = []
+
+    def mark_changed(self, xy_tuple):
+        self.changed_tiles.append(self.get_tile(xy_tuple))
 
     def get_tile(self, xy_tuple) -> Tile:
         return self.tiles[xy_tuple[0]][xy_tuple[1]]
