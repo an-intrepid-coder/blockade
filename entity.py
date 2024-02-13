@@ -34,10 +34,18 @@ class LaunchedWeapon:
         self.gui_alert = False
         self.known = known
 
+class MovingEntity:
+    def __init__(self, entity, last, current):
+        self.entity = entity
+        self.last = last
+        self.current = current
+        self.progress = 0
+        self.speed = 4
+
 class Entity:
     entities = 0
     def __init__(self, xy_tuple, faction):
-        self.xy_tuple = tuple(xy_tuple)
+        self.xy_tuple = xy_tuple
         self.faction = faction
         self.id = Entity.entities
         Entity.entities += 1

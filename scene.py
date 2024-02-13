@@ -15,6 +15,8 @@ import heapq
 from mission import *
 from mini_map import MiniMap
 from calendar import Calendar
+from pygame.math import Vector2
+from camera import *
 
 class Scene:
     def __init__(self, game):
@@ -28,8 +30,9 @@ class Scene:
         self.screen_wh_cells_tuple = game.screen_wh_cells_tuple
         self.screen_wh_cells_tuple_zoomed_out = game.screen_wh_cells_tuple_zoomed_out
         self.tilemap = None
-        self.camera = (0, 0)
+        self.camera = Camera((0, 0))
         self.entities = []
+        self.moving_entities = []
         self.console = Console()
         self.displaying_hud = True 
         self.console_scrolled_up_by = 0 
@@ -85,7 +88,7 @@ class Scene:
             self.move_camera(KEY_TO_DIRECTION[move_key])
             return True 
         elif move_key and KEY_TO_DIRECTION[move_key] == "wait" and self.ctrl_pressed():
-            self.camera = self.player.xy_tuple
+            self.camera.set(self.player.xy_tuple)
             return True
         elif move_key: 
             self.player.orientation = KEY_TO_DIRECTION[move_key]
@@ -108,7 +111,7 @@ class Scene:
         if pygame.key.get_pressed()[K_ESCAPE]:
             if isinstance(self, TacticalScene) and self.targeting_ability:
                 self.reset_target_mode()
-            self.camera = self.player.xy_tuple
+            self.camera.set(self.player.xy_tuple)
             self.displaying_mini_map = False
             self.display_changed = True
             self.displaying_big_splash = False
@@ -606,11 +609,11 @@ class Scene:
 
     def move_camera(self, direction):
         target_xy_tuple = (
-            self.camera[0] + DIRECTIONS[direction][0],
-            self.camera[1] + DIRECTIONS[direction][1]
+            self.camera.xy_tuple[0] + DIRECTIONS[direction][0],
+            self.camera.xy_tuple[1] + DIRECTIONS[direction][1]
         )
         if self.tilemap.tile_in_bounds(target_xy_tuple):
-            self.camera = target_xy_tuple
+            self.camera.set(target_xy_tuple)
 
     def entity_can_move(self, entity, direction) -> bool:
         target_xy = (entity.xy_tuple[0] + DIRECTIONS[direction][0], entity.xy_tuple[1] + DIRECTIONS[direction][1])
@@ -744,7 +747,7 @@ class CampaignScene(Scene):
         self.orientation = self.tilemap.orientation
         self.player_origin = self.tilemap.player_origin
         self.player = PlayerCampaignEntity(self.player_origin, self.game.debug) 
-        self.camera = self.player_origin
+        self.camera.set(self.player_origin)
         self.entities.append(self.player)
         self.phase = "island"
         self.invasion_target = self.select_invasion_target()
@@ -1127,7 +1130,7 @@ class CampaignScene(Scene):
             spawn = choice(list(filter(lambda x: x.tile_type == "ocean", \
                 self.tilemap.neighbors_of(choice(allied_ports).xy_tuple)))).xy_tuple
             self.player.xy_tuple = spawn
-            self.camera = spawn
+            self.camera.set(spawn)
             self.player.hp["current"] = self.player.hp["max"]
             self.tilemap.toggle_occupied(spawn)
             self.push_to_console("You and most of your crew are rescued!")
@@ -1175,7 +1178,7 @@ class CampaignScene(Scene):
         self.set_processing_event_done("sim_event_resupply_check")
 
     def move_entity(self, entity, direction) -> bool:
-        camera_coupled = self.player.xy_tuple == self.camera
+        camera_coupled = self.player.xy_tuple == self.camera.xy_tuple
         target_xy_tuple = (
             entity.xy_tuple[0] + DIRECTIONS[direction][0], 
             entity.xy_tuple[1] + DIRECTIONS[direction][1]
@@ -1190,7 +1193,7 @@ class CampaignScene(Scene):
             entity.next_move_time = self.time_units_passed + cost
             entity.last_direction = direction
             if entity.player and camera_coupled:
-                self.camera = self.player.xy_tuple
+                self.camera.set(self.player.xy_tuple)
             return True
         # valid movement
         elif self.entity_can_move(entity, direction):
@@ -1204,9 +1207,11 @@ class CampaignScene(Scene):
                     self.player_in_mission_zone = False
             self.tilemap.toggle_occupied(entity.xy_tuple)
             self.tilemap.toggle_occupied(target_xy_tuple)
+            mover = MovingEntity(entity, entity.xy_tuple, target_xy_tuple)
+            self.moving_entities.append(mover)
             entity.xy_tuple = target_xy_tuple
             if entity.player and camera_coupled:
-                self.camera = self.player.xy_tuple
+                self.camera.set(self.player.xy_tuple)
             time_unit_cost = entity.get_adjusted_speed()
             if direction in ["upright", "upleft", "downright", "downleft"]:
                 time_unit_cost *= 2
@@ -1219,7 +1224,7 @@ class CampaignScene(Scene):
         visible_entities = list(filter(lambda x: not x.hidden, self.entities))
         if pygame.key.get_pressed()[K_TAB] and len(visible_entities) > 0: 
             self.observation_index = (self.observation_index + 1) % len(visible_entities)
-            self.camera = visible_entities[self.observation_index].xy_tuple
+            self.camera.set(visible_entities[self.observation_index].xy_tuple)
             self.display_changed = True
             return True
         return False
@@ -1263,7 +1268,7 @@ class CampaignScene(Scene):
             self.draw_big_splash(self.help_splash)
 
     def draw_target_stats(self):
-        target = first(lambda x: not x.player and x.xy_tuple == self.camera and not x.hidden, self.entities)
+        target = first(lambda x: not x.player and x.xy_tuple == self.camera.xy_tuple and not x.hidden, self.entities)
         if target is not None:
             target_stats = [
                 "Target Name: {}".format(target.name),
@@ -1292,7 +1297,7 @@ class CampaignScene(Scene):
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
             "Extra Lives: {}".format(self.extra_lives),
             "Loc: {}".format(self.player.xy_tuple),
-            "Camera: {}".format(self.camera),
+            "Camera: {}".format(self.camera.xy_tuple),
             "Speed: {} ({})".format(self.player.speed_mode, self.player.get_adjusted_speed()),
             "Traveling: {}".format(DIRECTION_TO_COMPASS[self.player.orientation]),
             "Torpedos: {}".format(self.player.torps),
@@ -1318,8 +1323,8 @@ class CampaignScene(Scene):
         self.screen.blit(stats_surface, pos)
 
     def draw_level(self, grid_lines=True):
-        topleft = (self.camera[0] - self.screen_wh_cells_tuple[0] // 2, \
-            self.camera[1] - self.screen_wh_cells_tuple[1] // 2)
+        topleft = (self.camera.xy_tuple[0] - self.screen_wh_cells_tuple[0] // 2, \
+            self.camera.xy_tuple[1] - self.screen_wh_cells_tuple[1] // 2)
         area_rect = (topleft[0] * CELL_SIZE, topleft[1] * CELL_SIZE, \
             self.screen_wh_cells_tuple[0] * CELL_SIZE, self.screen_wh_cells_tuple[1] * CELL_SIZE)
         # draw tilemap
@@ -1337,9 +1342,23 @@ class CampaignScene(Scene):
         else:
             visible_entities = list(filter(lambda x: not x.hidden, self.entities))
         for entity in visible_entities:
-            x, y = entity.xy_tuple
+            mover = first(lambda x: x.entity is entity, self.moving_entities)
+            if mover is None:
+                x, y = entity.xy_tuple
+            else:
+                x, y = mover.last
             if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
-                rect = ((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                if mover is None:
+                    rect = ((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+                else:
+                    origin = Vector2((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE)
+                    tx, ty = mover.current
+                    target = Vector2((tx - topleft[0]) * CELL_SIZE, (ty - topleft[1]) * CELL_SIZE)
+                    actual = origin.move_towards(target, mover.progress * mover.speed)
+                    mover.progress += 2
+                    rect = (actual[0], actual[1], CELL_SIZE, CELL_SIZE)
+                    if target == actual:
+                        self.moving_entities.remove(mover)
                 img = entity.image
                 self.screen.blit(img, rect)
                 # a "tail" showing direction came from:
@@ -1347,7 +1366,7 @@ class CampaignScene(Scene):
                 tail_point = self.get_tail_point(entity, target) 
                 pygame.draw.line(self.screen, "white", target, tail_point, 2) 
                 # reticule if camera on AI unit:
-                if entity.xy_tuple == self.camera and not entity.player:
+                if entity.xy_tuple == self.camera.xy_tuple and not entity.player:
                     target = (rect[0] + CELL_SIZE // 2, rect[1] + CELL_SIZE // 2)
                     pygame.draw.circle(self.screen, "cyan", target, int(CELL_SIZE * .66), 2)
         for tile in self.active_front_line_tiles:
@@ -1513,7 +1532,7 @@ class TacticalScene(Scene):
             if "right" in traveling:
                 player.xy_tuple = (player.xy_tuple[0] + player_offset, player.xy_tuple[1])
             self.player = player
-            self.camera = player.xy_tuple
+            self.camera.set(player.xy_tuple)
             spawn_ls.append(player)
             self.tilemap.toggle_occupied(player.xy_tuple)
         units = []
@@ -1632,7 +1651,7 @@ class TacticalScene(Scene):
         self.player.contacts = list(map(lambda x: Contact(x, 100), filter(lambda x: not x.player, self.entities)))
 
     def move_entity(self, entity, direction) -> bool:
-        camera_coupled = self.player.xy_tuple == self.camera
+        camera_coupled = self.player.xy_tuple == self.camera.xy_tuple
         target_xy_tuple = (
             entity.xy_tuple[0] + DIRECTIONS[direction][0], 
             entity.xy_tuple[1] + DIRECTIONS[direction][1]
@@ -1657,15 +1676,18 @@ class TacticalScene(Scene):
             entity.momentum = max(entity.momentum - 2, 0)
             entity.last_direction = direction
             if entity.player and camera_coupled:
-                self.camera = self.player.xy_tuple
+                self.camera.set(self.player.xy_tuple)
             return True
         # valid movement
         elif self.entity_can_move(entity, direction):
             self.tilemap.toggle_occupied(entity.xy_tuple)
             self.tilemap.toggle_occupied(target_xy_tuple)
+            if entity in list(map(lambda x: x.entity, self.player.contacts)) or entity.player:
+                mover = MovingEntity(entity, entity.xy_tuple, target_xy_tuple) 
+                self.moving_entities.append(mover) 
             entity.xy_tuple = target_xy_tuple
             if entity.player and camera_coupled:
-                self.camera = self.player.xy_tuple
+                self.camera.set(self.player.xy_tuple)
             time_unit_cost = entity.get_adjusted_speed()
             if direction in ["upright", "upleft", "downright", "downleft"]:
                 time_unit_cost *= 2
@@ -1684,12 +1706,12 @@ class TacticalScene(Scene):
         if pygame.key.get_pressed()[K_TAB] and self.targeting_ability is not None:
             targets = self.targets(self.player, self.targeting_ability.type)
             self.targeting_index["current"] = (self.targeting_index["current"] + 1) % self.targeting_index["max"]
-            self.camera = targets[self.targeting_index["current"]].xy_tuple
+            self.camera.set(targets[self.targeting_index["current"]].xy_tuple)
             self.display_changed = True
             return True
         elif pygame.key.get_pressed()[K_TAB] and len(self.player.contacts) > 0: 
             self.observation_index = (self.observation_index + 1) % len(self.player.contacts)
-            self.camera = self.player.contacts[self.observation_index].entity.xy_tuple
+            self.camera.set(self.player.contacts[self.observation_index].entity.xy_tuple)
             self.display_changed = True
             return True
         return False
@@ -1697,7 +1719,7 @@ class TacticalScene(Scene):
     def reset_target_mode(self):
         self.targeting_ability = None
         self.targeting_index = {"current": 0, "max": 0}
-        self.camera = self.player.xy_tuple
+        self.camera.set(self.player.xy_tuple)
         self.display_changed = True
 
     def ability_key_pressed(self): # Returns key constant or False
@@ -1756,7 +1778,7 @@ class TacticalScene(Scene):
             return False
         else:
             self.targeting_ability = ability
-            self.camera = targets[self.targeting_index["current"]].xy_tuple
+            self.camera.set(targets[self.targeting_index["current"]].xy_tuple)
             self.targeting_index["max"] = len(targets)
             self.display_changed = True
             return True
@@ -2629,7 +2651,7 @@ class TacticalScene(Scene):
             self.draw_big_splash(self.help_splash)
 
     def draw_target_stats(self):
-        target = first(lambda x: not x.player and x.xy_tuple == self.camera, self.entities)
+        target = first(lambda x: not x.player and x.xy_tuple == self.camera.xy_tuple, self.entities)
         if target is not None:
             contact = first(lambda x: x.entity is target, self.player.contacts)
             if contact is not None:
@@ -2662,7 +2684,7 @@ class TacticalScene(Scene):
             "Hunted: {}".format(self.player_being_hunted()),
             "Inc. Torps: {}".format(len(self.player.known_torpedos())), 
             "Loc: {}".format(self.player.xy_tuple),
-            "Camera: {}".format(self.camera),
+            "Camera: {}".format(self.camera.xy_tuple),
             "Speed: {} ({})".format(self.player.speed_mode, self.player.get_adjusted_speed()),
             "Momentum: {}".format(self.player.momentum),
             "Traveling: {}".format(DIRECTION_TO_COMPASS[self.player.orientation]),
@@ -2712,7 +2734,7 @@ class TacticalScene(Scene):
         else:
             cell_size = CELL_SIZE
             wh_tuple = self.screen_wh_cells_tuple
-        topleft = (self.camera[0] - wh_tuple[0] // 2, self.camera[1] - wh_tuple[1] // 2)
+        topleft = (self.camera.xy_tuple[0] - wh_tuple[0] // 2, self.camera.xy_tuple[1] - wh_tuple[1] // 2)
         area_rect = (topleft[0] * cell_size, topleft[1] * cell_size, wh_tuple[0] * cell_size, wh_tuple[1] * cell_size)
         # draw tilemap
         changed_tiles = self.tilemap.changed_tiles
@@ -2766,10 +2788,28 @@ class TacticalScene(Scene):
             player_contacts_entities = list(map(lambda x: x.entity, self.player.contacts))
         visible_entities = list(filter(lambda x: x in player_contacts_entities, self.entities)) + [self.player]
         for entity in visible_entities:
+            mover = first(lambda x: x.entity is entity, self.moving_entities)
             contact = first(lambda x: x.entity is entity, self.player.contacts)
-            x, y = entity.xy_tuple
+            if mover is None:
+                x, y = entity.xy_tuple
+            else:
+                x, y = mover.last
             if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
-                rect = ((x - topleft[0]) * cell_size, (y - topleft[1]) * cell_size, cell_size, cell_size)
+                if mover is None:
+                    rect = ((x - topleft[0]) * cell_size, (y - topleft[1]) * cell_size, cell_size, cell_size)
+                else:
+                    origin = Vector2((x - topleft[0]) * cell_size, (y - topleft[1]) * cell_size)
+                    tx, ty = mover.current
+                    target = Vector2((tx - topleft[0]) * cell_size, (ty - topleft[1]) * cell_size)
+                    if self.zoomed_out:
+                        actual = origin.move_towards(target, mover.progress * mover.speed)
+                        mover.progress += 1
+                    else:
+                        actual = origin.move_towards(target, mover.progress * mover.speed)
+                        mover.progress += 2
+                    rect = (actual[0], actual[1], CELL_SIZE, CELL_SIZE)
+                    if target == actual:
+                        self.moving_entities.remove(mover)
                 if entity.player or entity.identified or self.debug:
                     if self.zoomed_out:
                         img = entity.image_zoomed_out
@@ -2791,7 +2831,7 @@ class TacticalScene(Scene):
                 if any(torps + missiles):
                     pygame.draw.circle(self.screen, COLOR_MISSION_HIGHLIGHT, target, int(cell_size * .66), 4)
                 # reticule if camera on AI unit:
-                if entity.xy_tuple == self.camera and not entity.player:
+                if entity.xy_tuple == self.camera.xy_tuple and not entity.player:
                     target = (rect[0] + cell_size // 2, rect[1] + cell_size // 2)
                     pygame.draw.circle(self.screen, "cyan", target, int(cell_size * .66), 2)
                 # acc rating
