@@ -1410,6 +1410,8 @@ class TacticalScene(Scene):
             clear=True)
         self.mini_map = MiniMap(self, "tactical")
         self.psonar_overlay_cell = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
+        #self.psonar_overlay_cell.set_colorkey(ALPHA_KEY)
+        #self.psonar_overlay_cell.fill(ALPHA_KEY)
         self.psonar_overlay_cell_zoomed_out = pygame.Surface((ZOOMED_OUT_CELL_SIZE, ZOOMED_OUT_CELL_SIZE), \
             flags=SRCALPHA)
         self.psonar_overlay_cell.fill(SONAR_OVERLAY_COLOR)
@@ -1424,6 +1426,81 @@ class TacticalScene(Scene):
             flags=SRCALPHA)
         self.targeting_overlay_cell.fill(HUD_OPAQUE_RED)
         self.targeting_overlay_cell_zoomed_out.fill(HUD_OPAQUE_RED)
+        self.player_sonar_overlay_surface = pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * CELL_SIZE, \
+            (PASSIVE_SONAR_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
+        self.player_sonar_overlay_surface.set_colorkey(ALPHA_KEY)
+        self.player_sonar_overlay_surface.fill(ALPHA_KEY)
+        self.player_radar_overlay_surface = pygame.Surface(((RADAR_RANGE * 2 + 1) * CELL_SIZE, \
+            (RADAR_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
+        self.player_radar_overlay_surface.set_colorkey(ALPHA_KEY)
+        self.player_radar_overlay_surface.fill(ALPHA_KEY)
+        self.player_sonar_overlay_surface_zoomed_out = \
+            pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
+            (PASSIVE_SONAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
+        self.player_sonar_overlay_surface_zoomed_out.set_colorkey(ALPHA_KEY)
+        self.player_sonar_overlay_surface_zoomed_out.fill(ALPHA_KEY)
+        self.player_radar_overlay_surface_zoomed_out = pygame.Surface(((RADAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
+            (RADAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
+        self.player_radar_overlay_surface.set_colorkey(ALPHA_KEY)
+        self.player_radar_overlay_surface.fill(ALPHA_KEY)
+        self.player_torpedo_range_overlay_surface = pygame.Surface(((TORPEDO_RANGE * 2 + 1) * CELL_SIZE, \
+            (TORPEDO_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
+        self.player_torpedo_range_overlay_surface.set_colorkey(ALPHA_KEY)
+        self.player_torpedo_range_overlay_surface.fill(ALPHA_KEY)
+        self.player_torpedo_range_overlay_surface_zoomed_out = \
+            pygame.Surface(((TORPEDO_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
+            (TORPEDO_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
+        self.player_torpedo_range_overlay_surface_zoomed_out.set_colorkey(ALPHA_KEY)
+        self.player_torpedo_range_overlay_surface_zoomed_out.fill(ALPHA_KEY)
+        self.player_missile_range_overlay_surface_zoomed_out = \
+            pygame.Surface(((TORPEDO_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
+            (MISSILE_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
+        self.player_missile_range_overlay_surface_zoomed_out.set_colorkey(ALPHA_KEY)
+        self.player_missile_range_overlay_surface_zoomed_out.fill(ALPHA_KEY)
+        self.player_missile_range_overlay_surface = pygame.Surface(((TORPEDO_RANGE * 2 + 1) * CELL_SIZE, \
+            (MISSILE_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
+        self.player_missile_range_overlay_surface.set_colorkey(ALPHA_KEY)
+        self.player_missile_range_overlay_surface.fill(ALPHA_KEY)
+        self.enemy_sonar_overlay = pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * CELL_SIZE, \
+            (PASSIVE_SONAR_RANGE* 2 + 1) * CELL_SIZE), flags=SRCALPHA)
+        self.enemy_sonar_overlay.set_colorkey(ALPHA_KEY)
+        self.enemy_sonar_overlay.fill(ALPHA_KEY)
+        self.enemy_sonar_overlay_zoomed_out = pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
+            (PASSIVE_SONAR_RANGE* 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
+        self.enemy_sonar_overlay_zoomed_out.set_colorkey(ALPHA_KEY)
+        self.enemy_sonar_overlay_zoomed_out.fill(ALPHA_KEY)
+        overlays = [
+            {"overlay": self.player_sonar_overlay_surface, "color": SONAR_OVERLAY_COLOR, \
+                "rad": PASSIVE_SONAR_RANGE, "size": CELL_SIZE},
+            {"overlay": self.player_torpedo_range_overlay_surface, "color": HUD_OPAQUE_RED, \
+                "rad": TORPEDO_RANGE, "size": CELL_SIZE},
+            {"overlay": self.player_radar_overlay_surface, "color": RADAR_OVERLAY_COLOR, "rad": RADAR_RANGE, \
+                "size": CELL_SIZE},
+            {"overlay": self.player_missile_range_overlay_surface, "color": HUD_OPAQUE_RED, \
+                "rad": MISSILE_RANGE, "size": CELL_SIZE},
+            {"overlay": self.player_radar_overlay_surface_zoomed_out, "color": RADAR_OVERLAY_COLOR, \
+                "rad": RADAR_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
+            {"overlay": self.player_sonar_overlay_surface_zoomed_out, "color": SONAR_OVERLAY_COLOR, \
+                "rad": PASSIVE_SONAR_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
+            {"overlay": self.player_torpedo_range_overlay_surface_zoomed_out, \
+                "color": HUD_OPAQUE_RED, "rad": TORPEDO_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
+            {"overlay": self.player_missile_range_overlay_surface_zoomed_out, \
+                "color": HUD_OPAQUE_RED, "rad": MISSILE_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
+            {"overlay": self.enemy_sonar_overlay, "color": ENEMY_SONAR_OVERLAY_COLOR, "rad": PASSIVE_SONAR_RANGE, \
+                "size": CELL_SIZE},
+            {"overlay": self.enemy_sonar_overlay_zoomed_out, "color": ENEMY_SONAR_OVERLAY_COLOR, \
+                "rad": PASSIVE_SONAR_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
+        ]
+        for overlay in overlays: 
+            print(overlay)
+            w = overlay["overlay"].get_width() // overlay["size"]
+            h = overlay["overlay"].get_height() // overlay["size"]
+            origin = (w // 2, h // 2) 
+            for x in range(w):
+                for y in range(h):
+                    if manhattan_distance(origin, (x, y)) <= overlay["rad"] and (x, y) != origin:
+                        rect = (x * overlay["size"], y * overlay["size"], overlay["size"], overlay["size"])
+                        pygame.draw.rect(overlay["overlay"], overlay["color"], rect)
 
     def update_master_surface(self, changed_tiles, reset=False, zoomed_out=False, clear=False):
         if zoomed_out:
@@ -2745,48 +2822,62 @@ class TacticalScene(Scene):
         else:
             self.screen.blit(self.master_surface, (0, 0), area=area_rect)
 
-        def draw_overlay(origin, radius, color): 
-            tiles_in_range = list(filter(lambda x: x.xy_tuple != origin, \
-                valid_tiles_in_range_of(self.tilemap.tiles, origin, radius, manhattan=True)))
-            # filter out land tiles if torpedo attack
-            if self.targeting_ability is not None:
-                if "torpedo" in self.targeting_ability.type:
-                    tiles_in_range = list(filter(lambda x: x.tile_type == "ocean", tiles_in_range))
-            # lay down overlay:
-            for tile in tiles_in_range:
-                x, y = tile.xy_tuple
-                pos = ((x - topleft[0]) * cell_size, (y - topleft[1]) * cell_size)
-                if color == SONAR_OVERLAY_COLOR and self.zoomed_out:
-                    self.screen.blit(self.psonar_overlay_cell_zoomed_out, pos)
-                elif color == SONAR_OVERLAY_COLOR: 
-                    self.screen.blit(self.psonar_overlay_cell, pos)
-                elif color == RADAR_OVERLAY_COLOR and self.zoomed_out:
-                    self.screen.blit(self.radar_overlay_cell_zoomed_out, pos)
-                elif color == RADAR_OVERLAY_COLOR:
-                    self.screen.blit(self.radar_overlay_cell, pos)
-                elif color == HUD_OPAQUE_RED and self.zoomed_out:
-                    self.screen.blit(self.targeting_overlay_cell_zoomed_out, pos)
-                elif color == HUD_OPAQUE_RED:
-                    self.screen.blit(self.targeting_overlay_cell, pos)
-
-        # player overlays 
+        # player overlays  
+        torpedo_overlay_to_draw = False
+        missile_overlay_to_draw = False
+        psonar_overlay_to_draw = False
+        radar_overlay_to_draw = False
         if self.targeting_ability is not None:
-            draw_overlay(self.player.xy_tuple, self.targeting_ability.range, HUD_OPAQUE_RED)
-        else:
-            # NOTE: These sensor overlays may overlap
-            if self.overlay_sonar: 
-                psonar_range = first(lambda x: x.type == "passive sonar", self.player.abilities).range
-                draw_overlay(self.player.xy_tuple, psonar_range, SONAR_OVERLAY_COLOR)
-            if self.overlay_radar:
-                radar_range = first(lambda x: x.type == "radar", self.player.abilities).range
-                draw_overlay(self.player.xy_tuple, radar_range, RADAR_OVERLAY_COLOR)
+            if self.targeting_ability.type == "torpedo": 
+                torpedo_overlay_pos = ((self.player.xy_tuple[0] - topleft[0] - TORPEDO_RANGE) * cell_size, \
+                    (self.player.xy_tuple[1] - topleft[1] - TORPEDO_RANGE) * cell_size)
+                torpedo_overlay_to_draw = True
+            if self.targeting_ability.type == "missile":
+                missile_overlay_pos = ((self.player.xy_tuple[0] - topleft[0] - MISSILE_RANGE) * cell_size, \
+                    (self.player.xy_tuple[1] - topleft[1] - MISSILE_RANGE) * cell_size)
+                missile_overlay_to_draw = True
+        if self.overlay_sonar: 
+            psonar_overlay_pos = ((self.player.xy_tuple[0] - topleft[0] - PASSIVE_SONAR_RANGE) * cell_size, \
+                (self.player.xy_tuple[1] - topleft[1] - PASSIVE_SONAR_RANGE) * cell_size)
+            psonar_overlay_to_draw = True
+        if self.overlay_radar:
+            radar_overlay_pos = ((self.player.xy_tuple[0] - topleft[0] - RADAR_RANGE) * cell_size, \
+                (self.player.xy_tuple[1] - topleft[1] - RADAR_RANGE) * cell_size)
+            radar_overlay_to_draw = True
+        if torpedo_overlay_to_draw and self.zoomed_out:
+            self.screen.blit(self.player_torpedo_range_overlay_surface_zoomed_out, torpedo_overlay_pos)
+        elif torpedo_overlay_to_draw:
+            self.screen.blit(self.player_torpedo_range_overlay_surface, torpedo_overlay_pos)
+        if missile_overlay_to_draw and self.zoomed_out:
+            self.screen.blit(self.player_missile_range_overlay_surface_zoomed_out, missile_overlay_pos)
+        elif missile_overlay_to_draw:
+            self.screen.blit(self.player_missile_range_overlay_surface, missile_overlay_pos)
+        if psonar_overlay_to_draw and self.zoomed_out:
+            self.screen.blit(self.player_sonar_overlay_surface_zoomed_out, psonar_overlay_pos)
+        elif psonar_overlay_to_draw:
+            self.screen.blit(self.player_sonar_overlay_surface, psonar_overlay_pos)
+        if radar_overlay_to_draw and self.zoomed_out:
+            self.screen.blit(self.player_radar_overlay_surface_zoomed_out, radar_overlay_pos)
+        elif radar_overlay_to_draw: 
+            self.screen.blit(self.player_radar_overlay_surface, radar_overlay_pos)
 
-        # draw entities:
+        # draw enemy sonar overlay layer
         if self.debug:
             player_contacts_entities = self.entities
         else:
             player_contacts_entities = list(map(lambda x: x.entity, self.player.contacts))
         visible_entities = list(filter(lambda x: x in player_contacts_entities, self.entities)) + [self.player]
+        for entity in visible_entities:
+            contact = first(lambda x: x.entity is entity, self.player.contacts)
+            if contact is not None and entity.identified and not entity.player and entity.has_ability("passive sonar"):
+                enemy_psonar_overlay_pos = ((entity.xy_tuple[0] - topleft[0] - PASSIVE_SONAR_RANGE) * cell_size, \
+                    (entity.xy_tuple[1] - topleft[1] - PASSIVE_SONAR_RANGE) * cell_size)
+                if self.zoomed_out:
+                    self.screen.blit(self.enemy_sonar_overlay_zoomed_out, enemy_psonar_overlay_pos)
+                else:
+                    self.screen.blit(self.enemy_sonar_overlay, enemy_psonar_overlay_pos)
+
+        # draw entities:
         for entity in visible_entities:
             mover = first(lambda x: x.entity is entity, self.moving_entities)
             contact = first(lambda x: x.entity is entity, self.player.contacts)

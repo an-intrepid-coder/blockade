@@ -213,7 +213,8 @@ class TacticalEntity(Entity):
         return closest
 
     def get_hostile_contacts(self):
-        return list(filter(lambda x: x.entity.faction != self.faction and x.entity.faction != "neutral", self.contacts))
+        return list(filter(lambda x: x.entity.faction != self.faction and x.entity.faction != "neutral" \
+            and x.entity.identified, self.contacts))
 
     def can_detect_incoming_torpedos(self):
         return self.has_skill("visual detection") or \
