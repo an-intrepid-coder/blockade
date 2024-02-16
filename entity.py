@@ -9,6 +9,7 @@ from alert_level import AlertLevel, random_starting_alert_level
 from euclidean import manhattan_distance
 import sort_keys
 from unit_tile import *
+from sheets import *
 
 class Contact: 
     def __init__(self, entity, acc):
@@ -34,17 +35,32 @@ class LaunchedWeapon:
         self.gui_alert = False
         self.known = known
 
-class MovingEntity:
-    def __init__(self, entity, last, current):
-        self.entity = entity
-        self.last = last
-        self.current = current
-        self.progress = 0
-        self.speed = 4
+class Explosion:
+    def __init__(self, xy_tuple, sheet):
+        self.xy_tuple = xy_tuple
+        self.sheet = sheet
+        self.done = False
+        self.frame_count = 0
+        self.frame_index = 0
+        self.num_frames = 6
+
+    def get_drawn(self, zoomed_out=False) -> pygame.Surface:
+        if not self.done:
+            img = grab_cell_from_sheet(self.sheet, self.frame_index)
+        else:
+            img = grab_cell_from_sheet(self.sheet, self.num_frames - 1)
+        self.frame_count = (self.frame_count + 1) % EXPLOSION_FRAME_INDEX_INCREMENT_FREQ
+        if self.frame_count == 0:
+            self.frame_index = (self.frame_index + 1) % self.num_frames
+        if self.frame_index == self.num_frames - 1:
+            self.done = True
+        if zoomed_out:
+            return pygame.transform.scale(img, (ZOOMED_OUT_CELL_SIZE, ZOOMED_OUT_CELL_SIZE))
+        return img
 
 class Entity:
     entities = 0
-    def __init__(self, xy_tuple, faction):
+    def __init__(self, xy_tuple, faction, sheet):
         self.xy_tuple = xy_tuple
         self.faction = faction
         self.id = Entity.entities
@@ -64,7 +80,26 @@ class Entity:
         self.speed_mode = "normal"
         self.momentum = 0
         self.last_direction = "wait"
+        self.frame_orientation = "left"
         self.next_ability_time = 0
+        self.sheet = sheet
+        self.frame_index = 0
+        self.frame_count = 0
+        self.num_frames = 4
+
+    def get_drawn(self, zoomed_out=False) -> pygame.Surface:
+        if isinstance(self, CampaignEntity) or self.identified or self.player:
+            frame_sheet = self.sheet
+        else:
+            frame_sheet = self.unid_sheet
+        if zoomed_out:
+            img = frame_sheet["zoomed out"][self.frame_orientation][self.frame_index]
+        else:
+            img = frame_sheet["regular"][self.frame_orientation][self.frame_index]
+        if self.frame_count == 0:
+            self.frame_index = (self.frame_index + 1) % self.num_frames
+        self.frame_count = (self.frame_count + 1) % ENTITY_FRAME_INDEX_INCREMENT_FREQ
+        return img
 
     def on_cooldown(self, tu_passed):
         return self.next_ability_time > tu_passed
@@ -100,16 +135,14 @@ class Entity:
         return damage_taken
 
 class CampaignEntity(Entity):
-    def __init__(self, xy_tuple, faction, hidden=False):
-        super().__init__(xy_tuple, faction)
+    def __init__(self, xy_tuple, faction, sheet, hidden=False):
+        super().__init__(xy_tuple, faction, sheet)
         self.hidden = hidden
 
 class PlayerCampaignEntity(CampaignEntity):
-    def __init__(self, xy_tuple, debug):
-        super().__init__(xy_tuple, "allied")
+    def __init__(self, xy_tuple, debug, sheet):
+        super().__init__(xy_tuple, "allied", sheet)
         self.name = "PLAYER" # NOTE: temporary value
-        self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
-        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True, small=True)
         self.can_ocean_move = True
         self.player = True
         if debug:
@@ -121,18 +154,18 @@ class PlayerCampaignEntity(CampaignEntity):
         self.missiles = PLAYER_DEFAULT_MISSILES
         self.orientation = "wait"
 
-class ResupplyVessel(CampaignEntity):
-    def __init__(self, xy_tuple):
-        super().__init__(xy_tuple, "allied")
-        self.name = "resupply vessel"
-        self.image = unit_tile_circle(faction_to_color[self.faction])
+class AlliedFleet(CampaignEntity):
+    def __init__(self, xy_tuple, sheet):
+        super().__init__(xy_tuple, "allied", sheet)
+        self.name = "allied fleet"
         self.can_ocean_move = True
         self.hp = 30
         self.speed = 30
 
 class TacticalEntity(Entity): 
-    def __init__(self, xy_tuple, faction, direction=None, formation=None): 
-        super().__init__(xy_tuple, faction)
+    def __init__(self, xy_tuple, faction, sheet, unid_sheet, direction=None, formation=None): 
+        super().__init__(xy_tuple, faction, sheet)
+        self.unid_sheet = unid_sheet
         self.chaser = False
         self.chasing = False
         self.alert_level = random_starting_alert_level()
@@ -167,6 +200,7 @@ class TacticalEntity(Entity):
         self.missile_range_bonus = 0
         self.standoff = None
         self.mothership = None
+        self.explosion = None
 
     def dmg_str(self) -> str:
         if self.hp["current"] == self.hp["max"]:
@@ -184,7 +218,7 @@ class TacticalEntity(Entity):
             self.toggle_speed()
 
     def detected_str(self) -> str:
-        if self.identified:
+        if self.identified or self.player:
             name = self.name
         else:
             name = "unidentified unit"
@@ -213,8 +247,7 @@ class TacticalEntity(Entity):
         return closest
 
     def get_hostile_contacts(self):
-        return list(filter(lambda x: x.entity.faction != self.faction and x.entity.faction != "neutral" \
-            and x.entity.identified, self.contacts))
+        return list(filter(lambda x: x.entity.faction != self.faction and x.entity.faction != "neutral", self.contacts))
 
     def can_detect_incoming_torpedos(self):
         return self.has_skill("visual detection") or \
@@ -240,10 +273,8 @@ class TacticalEntity(Entity):
             self.alert_level = alert_level
 
 class PlayerSub(TacticalEntity):
-    def __init__(self, xy_tuple, campaign_entity): 
-        super().__init__(xy_tuple, "allied")
-        self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
-        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True, small=True)
+    def __init__(self, xy_tuple, campaign_entity, sheet): 
+        super().__init__(xy_tuple, "allied", sheet, sheet)
         self.can_ocean_move = True
         self.name = campaign_entity.name
         self.player = True
@@ -274,12 +305,8 @@ class PlayerSub(TacticalEntity):
 
 class EscortSub(TacticalEntity):
     # NOTE: This represents a relatively weak submarine the player might encounter guarding convoys
-    def __init__(self, xy_tuple, faction, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True)
-        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], upsidedown=True, small=True)
-        self.image_unidentified = unit_tile_triangle("dark gray", upsidedown=True)
-        self.image_unidentified_zoomed_out = unit_tile_triangle("dark gray", upsidedown=True, small=True)
+    def __init__(self, xy_tuple, faction, sheet, unid_sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, unid_sheet, direction=direction, formation=formation)
         self.name = "escort sub"  
         self.can_ocean_move = True
         self.abilities = [
@@ -303,12 +330,8 @@ class EscortSub(TacticalEntity):
 class Freighter(TacticalEntity):
     # NOTE: This represents a totally unarmed freighter, and not a Q-ship or anything like that. But I will include
     #       such things later.
-    def __init__(self, xy_tuple, faction, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_circle(faction_to_color[self.faction])
-        self.image_zoomed_out = unit_tile_circle(faction_to_color[self.faction], small=True)
-        self.image_unidentified = unit_tile_circle("dark gray")
-        self.image_unidentified_zoomed_out = unit_tile_circle("dark gray", small=True)
+    def __init__(self, xy_tuple, faction, sheet, unid_sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, unid_sheet, direction=direction, formation=formation)
         self.name = "freighter" 
         self.can_ocean_move = True
         # NOTE: tentative values below
@@ -323,10 +346,8 @@ class Freighter(TacticalEntity):
         ]
 
 class Sonobuoy(TacticalEntity):
-    def __init__(self, xy_tuple, faction, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_circle(faction_to_color[self.faction], hollow=True)
-        self.image_zoomed_out = unit_tile_circle(faction_to_color[self.faction], hollow=True, small=True)
+    def __init__(self, xy_tuple, faction, sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, sheet, direction=direction, formation=formation)
         self.name = "sonobuoy" 
         self.identified = True
         self.can_ocean_move = True
@@ -341,12 +362,8 @@ class Sonobuoy(TacticalEntity):
         ] 
 
 class SmallConvoyEscort(TacticalEntity):
-    def __init__(self, xy_tuple, faction, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_triangle(faction_to_color[self.faction])
-        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], small=True)
-        self.image_unidentified = unit_tile_circle("dark gray")
-        self.image_unidentified_zoomed_out = unit_tile_circle("dark gray", small=True)
+    def __init__(self, xy_tuple, faction, sheet, unid_sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, unid_sheet, direction=direction, formation=formation)
         self.name = "small convoy escort" 
         self.can_ocean_move = True
         # NOTE: tentative values below
@@ -370,12 +387,8 @@ class SmallConvoyEscort(TacticalEntity):
         ] 
 
 class PatrolPlane(TacticalEntity):
-    def __init__(self, xy_tuple, faction, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_cross(faction_to_color[self.faction])
-        self.image_zoomed_out = unit_tile_cross(faction_to_color[self.faction], small=True)
-        self.image_unidentified = unit_tile_cross("dark gray")
-        self.image_unidentified_zoomed_out = unit_tile_cross("dark gray", small=True)
+    def __init__(self, xy_tuple, faction, sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, sheet, direction=direction, formation=formation)
         self.name = "patrol plane" 
         self.can_ocean_move = True
         self.can_air_move = True
@@ -395,14 +408,11 @@ class PatrolPlane(TacticalEntity):
         self.alert_level = AlertLevel.ALERTED
         # NOTE: aircraft are always in fast mode
         self.toggle_speed() 
+        self.num_frames = 1
 
 class PatrolHelicopter(TacticalEntity):
-    def __init__(self, xy_tuple, faction, mothership, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_cross(faction_to_color[self.faction])
-        self.image_zoomed_out = unit_tile_cross(faction_to_color[self.faction], small=True)
-        self.image_unidentified = unit_tile_cross("dark gray")
-        self.image_unidentified_zoomed_out = unit_tile_cross("dark gray", small=True)
+    def __init__(self, xy_tuple, faction, mothership, sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, sheet, direction=direction, formation=formation)
         self.name = "patrol helicopter" 
         self.can_ocean_move = True
         self.can_air_move = True
@@ -427,15 +437,12 @@ class PatrolHelicopter(TacticalEntity):
         self.toggle_speed() 
         # NOTE: patrol helicopters begin with good copies of all mothership contacts
         self.contacts = [contact.copy() for contact in mothership.contacts] 
+        self.num_frames = 2
 
 class HeavyConvoyEscort(TacticalEntity):
     # NOTE: These are "boss fights", or even to be avoided entirely by the player
-    def __init__(self, xy_tuple, faction, direction=None, formation=None):
-        super().__init__(xy_tuple, faction, direction=direction, formation=formation)
-        self.image = unit_tile_triangle(faction_to_color[self.faction])
-        self.image_zoomed_out = unit_tile_triangle(faction_to_color[self.faction], small=True)
-        self.image_unidentified = unit_tile_circle("dark gray")
-        self.image_unidentified_zoomed_out = unit_tile_circle("dark gray", small=True)
+    def __init__(self, xy_tuple, faction, sheet, unid_sheet, direction=None, formation=None):
+        super().__init__(xy_tuple, faction, sheet, unid_sheet, direction=direction, formation=formation)
         self.name = "heavy convoy escort" 
         self.can_ocean_move = True
         # NOTE: highly tentative values below

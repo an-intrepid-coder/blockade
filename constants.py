@@ -39,7 +39,7 @@ PASSIVE_SONAR_RANGE = 21
 RADAR_RANGE = 41
 
 ACTIVE_SONAR_RANGE = 21
-ACTIVE_SONAR_TIME_COST = 5
+ACTIVE_SONAR_TIME_COST = 30
 ASONAR_USE_TARGET_ALERTED = 9
 ASONAR_USE_TARGET_UNALERTED = 5
 
@@ -82,11 +82,39 @@ MOMENTUM_CAP = 6
 MOMENTUM_FACTOR = .05
 FAST_MODE_BONUS = 2
 
-VERSION = "0.0.0"
+VERSION = "0.0.1"
 
 FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Regular.ttf"))
 BOLD_FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Bold.ttf"))
 WINDOW_ICON_PATH = path.abspath(path.join(path.dirname(__file__), "./window_icon.png"))
+ALLIED_CITIES_PATH = path.abspath(path.join(path.dirname(__file__), "./images/AlliedCities.png"))
+ENEMY_CITIES_PATH = path.abspath(path.join(path.dirname(__file__), "./images/EnemyCities.png"))
+ENEMY_FREIGHTER_PATH = path.abspath(path.join(path.dirname(__file__), "./images/EnemyFreighter.png"))
+ESCORT_SUB_PATH = path.abspath(path.join(path.dirname(__file__), "./images/EscortSub.png"))
+HEAVY_CONVOY_ESCORT_PATH = path.abspath(path.join(path.dirname(__file__), "./images/HeavyConvoyEscort.png"))
+LAND_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Land.png"))
+NEUTRAL_FREIGHTER_PATH = path.abspath(path.join(path.dirname(__file__), "./images/NeutralFreighter.png"))
+OPEN_OCEAN_PATH = path.abspath(path.join(path.dirname(__file__), "./images/OpenOcean.png"))
+PATROL_HELICOPTER_PATH = path.abspath(path.join(path.dirname(__file__), "./images/PatrolHelicopter.png"))
+PATROL_PLANE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/PatrolPlane.png"))
+PLAYER_SUB_PATH = path.abspath(path.join(path.dirname(__file__), "./images/PlayerSub.png")) 
+SMALL_CONVOY_ESCORT_PATH = path.abspath(path.join(path.dirname(__file__), "./images/SmallConvoyEscort.png")) 
+SONOBUOY_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Sonobuoy.png")) 
+ALLIED_FRONT_LINE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/AlliedFrontLine.png")) 
+ENEMY_FRONT_LINE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/EnemyFrontLine.png")) 
+SMALL_EXPLOSIONS_PATH = path.abspath(path.join(path.dirname(__file__), "./images/SmallExplosions.png")) 
+BIG_EXPLOSION_PATH = path.abspath(path.join(path.dirname(__file__), "./images/BigExplosion.png")) 
+UNIDENTIFIED_SURFACE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/UnidentifiedSurface.png")) 
+UNIDENTIFIED_SUBMERGED_PATH = path.abspath(path.join(path.dirname(__file__), "./images/UnidentifiedSubmerged.png")) 
+LOADING_SCREENSHOT_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Loader.jpg")) 
+ALLIED_FLEET_PATH = path.abspath(path.join(path.dirname(__file__), "./images/AlliedFleet.png")) 
+
+SEA_TILES_TO_FLIP = 30 
+SEA_TILES_TO_FLIP_TU_FREQ = 30 
+ENTITY_FRAME_INDEX_INCREMENT_FREQ = 1
+EXPLOSION_FRAME_INDEX_INCREMENT_FREQ = 1 
+SMALL_EXPLOSIONS_CHECK_TU_FREQ = 2 
+EXPLOSION_CHECK_TU_FREQ = 10
 
 FPS = 60
 
@@ -110,7 +138,7 @@ SENSOR_CHECKS_TU_FREQ = 20
 ALERT_CHECK_TU_FREQ = 21
 CHASE_CHECK_TU_FREQ = 30
 OFFMAP_ASW_CHECK_TU_FREQ = 60
-UPDATE_MINI_MAP_TU_FREQ = 10
+UPDATE_MINI_MAP_TU_FREQ = 5
 
 GAME_OVER_CHECK_TU_FREQ = 3
 RUN_WARSIM_TU_FREQ = 20
@@ -160,7 +188,8 @@ KEY_TO_DIRECTION = {
 HUD_OPAQUE_BLACK = (0, 0, 0, 120)
 HUD_OPAQUE_RED = (255, 0, 0, 120)
 SONAR_OVERLAY_COLOR = (0, 220, 220, 90)
-ENEMY_SONAR_OVERLAY_COLOR = (229, 189, 20, 40)
+LAND_COLOR = (19, 149, 26)
+ENEMY_SONAR_OVERLAY_COLOR = (40, 89, 0, 40)
 TRAFFIC_OVERLAY_COLOR = [0, 220, 0]
 OVERLAY_ALPHA_BASE = 80  
 OVERLAY_ALPHA_INC = 20  
@@ -215,6 +244,4 @@ PLAYER_REPAIR_FREQUENCY = 50
 VICTORY_THRESHOLD = 60 
 
 RESPAWN_TU_COST = 3000
-
-DEFAULT_DANGER_POINTS = 30 
 

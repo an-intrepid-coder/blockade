@@ -15,6 +15,7 @@ class MiniMap:
     def generate_terrain_base(self): 
         surf = pygame.Surface((self.tilemap.wh_tuple[0] * MM_CELL_SIZE, self.tilemap.wh_tuple[1] * MM_CELL_SIZE))
         # draw tilemap
+        cities = []
         for x in range(self.tilemap.wh_tuple[0]):
             for y in range(self.tilemap.wh_tuple[1]):
                 rect = (x * MM_CELL_SIZE, y * MM_CELL_SIZE, MM_CELL_SIZE, MM_CELL_SIZE)
@@ -22,11 +23,19 @@ class MiniMap:
                 tile = self.tilemap.get_tile((x, y))
                 if tile.tile_type == "ocean":
                     pygame.draw.rect(surf, "navy", rect)
+                    if tile.sea_route_node:
+                        pygame.draw.circle(surf, "white", center, 1)
                 elif tile.tile_type == "land":
-                    pygame.draw.rect(surf, "olive", rect)
+                    pygame.draw.rect(surf, LAND_COLOR, rect)
                 elif tile.tile_type == "city":
-                    pygame.draw.rect(surf, faction_to_color[tile.faction], rect)
-                    pygame.draw.rect(surf, "black", rect, 1)
+                    cities.append((x, y))
+        for tile in cities:
+            x, y = tile
+            rect = (x * MM_CELL_SIZE, y * MM_CELL_SIZE, MM_CELL_SIZE, MM_CELL_SIZE)
+            center = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
+            color = faction_to_color[self.tilemap.tiles[x][y].faction]
+            pygame.draw.circle(surf, color, center, 5)
+            pygame.draw.circle(surf, "black", center, 5, 2)
         return surf
 
     def generate_final_campaign(self): 
@@ -34,15 +43,16 @@ class MiniMap:
         # mission rect
         mission_rect = (self.scene.invasion_target.xy_tuple[0] * MM_CELL_SIZE - MISSION_RADIUS * MM_CELL_SIZE, \
             self.scene.invasion_target.xy_tuple[1] * MM_CELL_SIZE - MISSION_RADIUS * MM_CELL_SIZE, \
-            MISSION_RADIUS * 2 * MM_CELL_SIZE, MISSION_RADIUS * 2 * MM_CELL_SIZE)
+            (MISSION_RADIUS * 2 + 1) * MM_CELL_SIZE, (MISSION_RADIUS * 2 + 1) * MM_CELL_SIZE)
         pygame.draw.rect(surf, COLOR_MISSION_HIGHLIGHT, mission_rect, 1)
         # draw entities:
         for entity in self.scene.entities:
             if not entity.hidden or entity.player or self.scene.debug:
                 rect = (entity.xy_tuple[0] * MM_CELL_SIZE, entity.xy_tuple[1] * MM_CELL_SIZE, MM_CELL_SIZE, \
                     MM_CELL_SIZE) 
+                center = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
                 color = faction_to_color[entity.faction]
-                pygame.draw.rect(surf, color, rect)
+                pygame.draw.circle(surf, color, center, 3)
         scaled = pygame.transform.scale(surf, MINI_MAP_SIZE)
         pygame.draw.rect(scaled, "green", (0, 0, MINI_MAP_SIZE[0], MINI_MAP_SIZE[1]), 1)
         return scaled

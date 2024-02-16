@@ -1,14 +1,15 @@
 import pygame
 from constants import *
 
-def loading_screen():
+def loading_screen(bg):
     title_font = pygame.font.Font(FONT_PATH, TITLE_FONT_SIZE)
     subtitle_font = pygame.font.Font(FONT_PATH, HUD_FONT_SIZE)
     desktop_size = pygame.display.get_desktop_sizes()[0]
     w, h = desktop_size
     screen = pygame.display.get_surface()
     surf = pygame.Surface(desktop_size)
-    surf.fill("navy")
+    bg_final = pygame.transform.scale(bg, desktop_size)
+    surf.blit(bg_final, (0, 0))
     lines = [
         title_font.render("BLOCKADE", True, "white", "black"),
         title_font.render("", True, "white", "black"),

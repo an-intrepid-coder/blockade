@@ -55,6 +55,8 @@ class Tile:
         self.logistical_sea_route = False
         self.active_front = False
         self.danger_points = 0
+        self.city_index = None
+        self.front_line_index = 0
 
     def reduce_danger_points(self):
         if self.danger_points > 0:
@@ -335,6 +337,7 @@ def gen_campaign_map(wh_tuple) -> tuple:
             diffusion)) is not None
         if not city_too_close:
             tile.tile_type = "city"
+            tile.city_index = randint(0, 2)
             tile.coast = True
             tile.faction = "enemy"
             emplaced_cities += 1
@@ -353,6 +356,7 @@ def gen_campaign_map(wh_tuple) -> tuple:
                 tile.faction = "enemy"
                 if not city_too_close and tile.mainland:
                     tile.tile_type = "city"
+                    tile.city_index = randint(0, 2)
                     emplaced_cities += 1
                     if marked_untakeable < NUM_UNTAKEABLE_CITIES:
                         tile.untakeable_city = True
@@ -414,6 +418,11 @@ class TileMap:
             self.tiles = geography_generators[geography_type](wh_tuple)
         self.changed_tiles = []
 
+    def set_all_unoccupied(self):
+        for x in range(self.wh_tuple[0]):
+            for y in range(self.wh_tuple[1]):
+                self.tiles[x][y].occupied = False
+
     def mark_changed(self, xy_tuple):
         self.changed_tiles.append(self.get_tile(xy_tuple))
 
@@ -436,9 +445,9 @@ class TileMap:
                 neighbors.append(self.get_tile(target_xy))
         return neighbors
 
-    def toggle_occupied(self, xy_tuple):
+    def toggle_occupied(self, xy_tuple, status):
         if self.tile_in_bounds(xy_tuple):
-            self.tiles[xy_tuple[0]][xy_tuple[1]].occupied = not self.tiles[xy_tuple[0]][xy_tuple[1]].occupied
+            self.tiles[xy_tuple[0]][xy_tuple[1]].occupied = status
 
     def occupied(self, xy_tuple) -> bool:
         if not self.tile_in_bounds(xy_tuple):

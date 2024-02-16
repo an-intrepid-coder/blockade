@@ -10,14 +10,7 @@ class Mission:
         self.heavy_escorts_sunk = 0
         self.neutral_freighters_sunk = 0
         self.stealth_retained = True
-
-    def danger_increased(self) -> bool:
-        return self.stealth_retained == False \
-            or self.freighters_sunk > 0 \
-            or self.escorts_sunk > 0 \
-            or self.subs_sunk > 0 \
-            or self.heavy_escorts_sunk > 0 \
-            or self.neutral_freighters_sunk > 0
+        self.calculated = False
 
     def accomplished_something(self) -> bool:
         return self.freighters_sunk > 0 \
@@ -132,8 +125,6 @@ class AswPatrol(Mission):
             "___INTEL REPORT__",
             "",
         ])
-        if scale > 1: 
-            self.briefing_lines.extend(["> This is a large patrol.", ""])
         if offmap_asw: 
             self.briefing_lines.extend([
                 "> Within range of land-based ASW patrol planes.",
