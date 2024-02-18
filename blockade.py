@@ -26,6 +26,9 @@ class Game:
         self.log_sim_events = False
         self.log_ai_routines = False
         self.pathfinding_perf = False
+        self.perf_calls = True
+        self.testing_encounter = False
+        self.no_encounters = False
         self.allied_front_line_sheet = pygame.image.load(ALLIED_FRONT_LINE_PATH)
         self.allied_front_line_sheet.convert_alpha()
         self.enemy_front_line_sheet = pygame.image.load(ENEMY_FRONT_LINE_PATH)
@@ -66,12 +69,30 @@ class Game:
         self.sonobuoy_sheet.convert_alpha()
         self.allied_fleet_sheet = pygame.image.load(ALLIED_FLEET_PATH)
         self.allied_fleet_sheet.convert_alpha()
+        self.craters_sheet = pygame.image.load(CRATERS_PATH)
+        self.craters_sheet.convert_alpha()
+        self.wake_sheet = pygame.image.load(WAKE_PATH)
+        self.wake_sheet.convert_alpha()
+        self.torpedo_sheet = pygame.image.load(TORPEDO_PATH)
+        self.torpedo_sheet.convert_alpha()
+        self.missile_sheet = pygame.image.load(MISSILE_PATH)
+        self.missile_sheet.convert_alpha()
+        self.smoke_sheet = pygame.image.load(SMOKE_PATH)
+        self.smoke_sheet.convert_alpha()
+        self.allied_plane_sheet = pygame.image.load(ALLIED_PLANE_PATH)
+        self.allied_plane_sheet.convert_alpha()
+        self.allied_helicopter_sheet = pygame.image.load(ALLIED_HELICOPTER_PATH)
+        self.allied_helicopter_sheet.convert_alpha()
+        self.enemy_fleet_sheet = pygame.image.load(ENEMY_FLEET_PATH)
+        self.enemy_fleet_sheet.convert_alpha()
         self.entity_sheets = {
             self.escort_sub_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.heavy_convoy_escort_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.neutral_freighters_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.patrol_helicopter_sheet: {"frames": 2, "regular": {}, "zoomed out": {}},
+            self.allied_helicopter_sheet: {"frames": 2, "regular": {}, "zoomed out": {}},
             self.patrol_plane_sheet: {"frames": 1, "regular": {}, "zoomed out": {}},
+            self.allied_plane_sheet: {"frames": 1, "regular": {}, "zoomed out": {}},
             self.player_sub_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.sonobuoy_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.small_convoy_escort_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
@@ -79,6 +100,10 @@ class Game:
             self.unidentified_surface_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.unidentified_submerged_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
             self.allied_fleet_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
+            self.enemy_fleet_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
+            self.wake_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
+            self.torpedo_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
+            self.missile_sheet: {"frames": 4, "regular": {}, "zoomed out": {}},
         }
         for sheet in self.entity_sheets.keys():
             for direction in list(filter(lambda x: x != "wait", DIRECTIONS.keys())):
@@ -89,6 +114,17 @@ class Game:
                     frames_zoomed_out.append(grab_cell_from_sheet(sheet, index, direction, zoomed_out=True))
                 self.entity_sheets[sheet]["regular"][direction] = frames
                 self.entity_sheets[sheet]["zoomed out"][direction] = frames_zoomed_out
+        self.alert_font = pygame.font.Font(BOLD_FONT_PATH, ALERT_FONT_SIZE)
+        self.alerts = {
+            "hunted": self.alert_font.render("HUNTED!", True, "red"),
+            "incoming": self.alert_font.render("INCOMING TORPEDO!", True, "red"),
+            "damaged": self.alert_font.render("DAMAGED!", True, "red"),
+            "evaded": self.alert_font.render("EVADED!", True, "yellow"),
+            "resupplied": self.alert_font.render("RESUPPLIED!", True, "green"),
+            "repaired": self.alert_font.render("REPAIRED!", True, "green"),
+            "respawned": self.alert_font.render("NEW SHIP!", True, "green"),
+            "cooldown": self.alert_font.render("READY!", True, "yellow"),
+        }
         self.scene_campaign_map = CampaignScene(self)
         self.scene_tactical_combat = TacticalScene(self)
         self.current_scene = self.scene_campaign_map 
@@ -115,7 +151,6 @@ class Game:
         self.missiles_used = 0
         self.times_resupplied = 0
         self.extra_lives_used = 0
-        self.perf_calls = False
         self.perfing = { 
             "total": 0,
             "total campaign proc": 0,

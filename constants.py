@@ -1,11 +1,18 @@
 from os import path
 from pygame.locals import *
 
+VERSION = "0.0.2"
+
 SECONDS_PER_TU_CAMPAIGN = 720
 MINUTES_PER_TU_CAMPAIGN = SECONDS_PER_TU_CAMPAIGN // 60
 SECONDS_PER_TU_TACTICAL = 12
 
+MISSION_ZONE_FLEETS_PER_SIDE = 3
+ENEMY_FLEET_ASW_RADIUS = 6
+NEARBY_CITY_ASW_RADIUS = 3
+
 GAME_UPDATE_TICK_MS = 100
+GAME_UPDATE_TICK_FAST_MS = 50
 CONFIRM_RESET_TICK_MS = 5000
 MISSION_OVER_TICK_MS = 20
 
@@ -74,15 +81,14 @@ OFFMAP_ASW_ETA_RANGE = (200, 600)
 INVASION_ETA_RANGE = (600, 1000) 
 WARSIM_TILE_CREEP_FREQUENCY_RANGE_ISLAND = 100
 WARSIM_TILE_CREEP_FREQUENCY_RANGE_MAINLAND = 50
+FLEET_ENGAGEMENT_ETA_RANGE = (300, 1000)  
 
-MISSION_RADIUS = 12 
+MISSION_RADIUS = 18
 
 # NOTE: this will eventually vary by ship type.
 MOMENTUM_CAP = 6
 MOMENTUM_FACTOR = .05
 FAST_MODE_BONUS = 2
-
-VERSION = "0.0.1"
 
 FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Regular.ttf"))
 BOLD_FONT_PATH = path.abspath(path.join(path.dirname(__file__), "./sansation/Sansation-Bold.ttf"))
@@ -106,15 +112,30 @@ SMALL_EXPLOSIONS_PATH = path.abspath(path.join(path.dirname(__file__), "./images
 BIG_EXPLOSION_PATH = path.abspath(path.join(path.dirname(__file__), "./images/BigExplosion.png")) 
 UNIDENTIFIED_SURFACE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/UnidentifiedSurface.png")) 
 UNIDENTIFIED_SUBMERGED_PATH = path.abspath(path.join(path.dirname(__file__), "./images/UnidentifiedSubmerged.png")) 
-LOADING_SCREENSHOT_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Loader.jpg")) 
+LOADING_SCREENSHOT_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Loader2.jpg")) 
 ALLIED_FLEET_PATH = path.abspath(path.join(path.dirname(__file__), "./images/AlliedFleet.png")) 
+CRATERS_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Craters.png")) 
+WAKE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Wake.png")) 
+TORPEDO_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Torpedo.png")) 
+MISSILE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Missile.png")) 
+SMOKE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/Smoke.png")) 
+ALLIED_PLANE_PATH = path.abspath(path.join(path.dirname(__file__), "./images/AlliedPlane.png")) 
+ALLIED_HELICOPTER_PATH = path.abspath(path.join(path.dirname(__file__), "./images/AlliedHelicopter.png")) 
+ENEMY_FLEET_PATH = path.abspath(path.join(path.dirname(__file__), "./images/EnemyFleet.png")) 
 
 SEA_TILES_TO_FLIP = 30 
 SEA_TILES_TO_FLIP_TU_FREQ = 30 
+CRATER_CHECK_TU_FREQ = 100
+WAKE_CHECK_TU_FREQ = 50
 ENTITY_FRAME_INDEX_INCREMENT_FREQ = 1
 EXPLOSION_FRAME_INDEX_INCREMENT_FREQ = 1 
 SMALL_EXPLOSIONS_CHECK_TU_FREQ = 2 
 EXPLOSION_CHECK_TU_FREQ = 10
+ANIMATED_WEAPONS_CHECK_TU_FREQ = 1
+
+CRATER_ETA_RANGE = (1000, 3000)
+
+WAKE_ETA = 200 
 
 FPS = 60
 
@@ -122,6 +143,7 @@ MAX_SONOBUOYS = 32
 
 HUD_FONT_SIZE = 15
 TITLE_FONT_SIZE = 32
+ALERT_FONT_SIZE = 20
 
 CONSOLE_LINES = 8
 CONSOLE_PADDING = 4
@@ -215,7 +237,7 @@ PLAYER_HP = 20
 EXTRA_LIFE_THRESHOLD = 3000
 SCORE_FREIGHTER = 100
 SCORE_SMALL_CONVOY_ESCORT = 10
-SCORE_ESCORT_SUB = 50
+SCORE_ESCORT_SUB = 100
 SCORE_BOSS = EXTRA_LIFE_THRESHOLD // 2
 SCORE_BOSS_PRESENT = 100
 SCORE_DIFF_MOD = 20

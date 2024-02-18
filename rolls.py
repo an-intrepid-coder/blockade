@@ -8,11 +8,17 @@ def roll3d6() -> list:
 # NOTE: Specific rolls may use more/less dice, or take
 #       more modifiers, at some point.
 
+def roll_for_fleet_movement() -> bool:
+    return sum(roll3d6()) <= 4
+
+def roll_for_fleet_explosion() -> bool:
+    return sum(roll3d6()) <= 9
+
 def roll_for_front_line_small_explosion() -> bool:
-    return sum(roll3d6()) <= 4 # tentative
+    return sum(roll3d6()) <= 4 
 
 def roll_asw_encounter(traffic_points, mods=[]) -> int:
-    return sum(roll3d6()) - (min(traffic_points, 4) + sum(mods))
+    return sum(roll3d6()) - min((traffic_points + sum(mods), 5))
 
 def roll_shipping_encounter(traffic_points, mods=[]) -> int:
     return sum(roll3d6()) - (2 + traffic_points + sum(mods))

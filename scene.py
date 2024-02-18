@@ -21,8 +21,11 @@ from sheets import *
 
 class Scene:
     def __init__(self, game):
+        self.speed = GAME_UPDATE_TICK_MS
         self.display_changed = True
         self.game = game
+        self.wakes = []
+        self.alerts = []
         self.debug = game.debug
         self.log_sim_events = game.log_sim_events
         self.log_ai_routines = game.log_ai_routines
@@ -51,7 +54,7 @@ class Scene:
         self.displaying_help_splash = False
         self.paused = True
         pygame.time.set_timer(self.game.QUIT_CHECK_RESET_CONFIRM, CONFIRM_RESET_TICK_MS)
-     
+
     def processing_event_dependency_working(self, event_type) -> bool:
         dep = first(lambda x: x[0] == event_type, list(self.processing_events.values()))[3]
         if dep is not None:
@@ -296,7 +299,9 @@ class Scene:
         self.draw_level()
         self.draw_hud()
         self.display_changed = False
-        pygame.display.flip()
+        no_flip = isinstance(self, TacticalScene) and self.missiles_are_animating
+        if not no_flip:
+            pygame.display.flip()
 
     def handle_events(self):
         def processing() -> bool:
@@ -361,8 +366,36 @@ class Scene:
 
     def update(self):
         self.handle_events()
+        self.update_alerts()
+        if isinstance(self, TacticalScene) and not self.paused:
+            self.weapon_update()
         if isinstance(self, CampaignScene):
             self.encounter_post_check()
+
+    def update_alerts(self):
+        finished = []
+        for alert in self.alerts:
+            alert.update()
+            if alert.complete:
+                finished.append(alert)
+        self.alerts = list(filter(lambda x: x not in finished, self.alerts))
+
+    def weapon_update(self):
+        if self.zoomed_out:
+            cell_size = ZOOMED_OUT_CELL_SIZE
+        else:
+            cell_size = CELL_SIZE
+        for weapon in self.animating_weapons:
+            target_vec = Vector2((weapon.target.xy_tuple[0] * cell_size, weapon.target.xy_tuple[1] * cell_size))
+            new_pos = weapon.animation_vector.move_towards(target_vec, weapon.speed) 
+            weapon.animation_vector = new_pos
+            weapon.update_count += 1
+            if weapon.update_count > weapon.launch_updates:
+                weapon.animation_complete = True
+            if isinstance(weapon, Missile):
+                pos = (weapon.animation_vector[0] / cell_size, weapon.animation_vector[1] / cell_size)
+                smoke = Explosion(pos, self.game.smoke_sheet)
+                self.explosions.append(smoke)
 
     # Moves an entity in a completely random direction
     def entity_ai_random_move(self, entity):
@@ -384,6 +417,7 @@ class Scene:
         if isinstance(self, TacticalScene):
             if self.mission_over_splash is None and not self.game.campaign_mode:
                 return self.moved() \
+                    or self.toggled_time_compression() \
                     or self.swapped_hud() \
                     or self.toggled_mini_map() \
                     or self.toggled_briefing() \
@@ -402,6 +436,7 @@ class Scene:
                 return self.ended_mission_mode()
         elif isinstance(self, CampaignScene):
             return self.moved() \
+                or self.toggled_time_compression() \
                 or self.swapped_hud() \
                 or self.toggled_mini_map() \
                 or self.toggled_briefing() \
@@ -412,6 +447,21 @@ class Scene:
                 or self.help_button_pressed() \
                 or self.toggled_pause() \
                 or self.exited_game() 
+
+    def toggled_time_compression(self) -> bool: 
+        changed = False
+        if pygame.key.get_pressed()[K_t] and self.shift_pressed():
+            if self.speed == GAME_UPDATE_TICK_MS:
+                self.speed = GAME_UPDATE_TICK_FAST_MS
+                changed = True
+            elif self.speed == GAME_UPDATE_TICK_FAST_MS:
+                self.speed = GAME_UPDATE_TICK_MS
+                changed = True
+        if changed and isinstance(self, CampaignScene):
+            pygame.time.set_timer(self.game.GAME_UPDATE_TICK_CAMPAIGN, self.speed)
+        elif changed and isinstance(self, TacticalScene):
+            pygame.time.set_timer(self.game.GAME_UPDATE_TICK_TACTICAL, self.speed)
+        return changed
 
     def toggled_pause(self) -> bool:
         if pygame.key.get_pressed()[K_p]:
@@ -452,6 +502,7 @@ class Scene:
                 "[ctrl + e]: end mission", "",
                 "[ctrl + w]: swap hud placement", "",
                 "[shift + w]: toggle hud", "",
+                "[shift + t]: toggle time compression", "",
                 "[1, 2, f]: torps, missiles, fire", "",
                 "[9, 0]: sonar ratings, use radar", "",
                 "[8]: use active sonar", "",
@@ -470,6 +521,7 @@ class Scene:
                 "[ctrl + q]: quit game", "",
                 "[ctrl + w]: swap hud placement", "",
                 "[shift + w]: toggle hud", "",
+                "[shift + t]: toggle time compression", "",
                 "[left/right brackets, HOME]: scroll console, reset console", "",
             ]
         return lines
@@ -628,6 +680,7 @@ class CampaignScene(Scene):
         self.accomplished_something = False
         self.player_in_mission_zone = False
         self.displaying_final_splash = False
+        self.cratered_tiles = []
         self.processing_events = { 
             "run_entity_behavior": [pygame.event.custom_type(), self.run_entity_behavior, False, None],
             "dead_entity_check": [pygame.event.custom_type(), self.dead_entity_check, False, "run_entity_behavior"],
@@ -645,12 +698,34 @@ class CampaignScene(Scene):
             "small_explosions_check": [pygame.event.custom_type(), self.small_explosions_check, False, None],
             "flip_sea_tiles": [pygame.event.custom_type(), self.flip_sea_tiles, False, None],
             "update_mini_map": [pygame.event.custom_type(), self.update_mini_map, False, "sim_event_run_warsim"],
+            "crater_check": [pygame.event.custom_type(), self.crater_check, False, "update_front_lines"],
+            "wake_check": [pygame.event.custom_type(), self.wake_check, False, "run_entity_behavior"],
         }
         pygame.time.set_timer(self.game.GAME_UPDATE_TICK_CAMPAIGN, GAME_UPDATE_TICK_MS)
         pygame.time.set_timer(self.game.QUIT_CHECK_RESET_CONFIRM, CONFIRM_RESET_TICK_MS)
         changed_tiles = [tile for tile in self.tilemap.changed_tiles]
         self.master_surface = self.update_master_surface(changed_tiles, reset=True)
         self.mini_map = MiniMap(self, "campaign")
+
+    def wake_check(self):
+        if self.time_units_passed % WAKE_CHECK_TU_FREQ == 0:
+            removed = []
+            for wake in self.wakes:
+                if self.time_units_passed > wake.eta:
+                    removed.append(wake)
+            self.wakes = list(filter(lambda x: x not in removed, self.wakes))
+        self.set_processing_event_done("wake_check")
+
+    def crater_check(self):
+        if self.time_units_passed % CRATER_CHECK_TU_FREQ == 0:
+            removed = []
+            for tile in self.cratered_tiles:
+                if self.time_units_passed > tile.crater_eta:
+                    tile.crater_index = None
+                    tile.crater_eta = 0
+                    removed.append(tile)
+            self.cratered_tiles = list(filter(lambda x: x not in removed, self.cratered_tiles)) 
+        self.set_processing_event_done("crater_check")
 
     def small_explosions_check(self):
         if self.time_units_passed % SMALL_EXPLOSIONS_CHECK_TU_FREQ == 0:
@@ -705,7 +780,8 @@ class CampaignScene(Scene):
         self.tilemap = TileMap(CAMPAIGN_MAP_SIZE, "campaign")
         self.orientation = self.tilemap.orientation
         self.player_origin = self.tilemap.player_origin
-        self.player = PlayerCampaignEntity(self.player_origin, self.game.debug, self.game.entity_sheets[self.game.player_sub_sheet]) 
+        self.player = PlayerCampaignEntity(self.player_origin, self.game.debug, \
+            self.game.entity_sheets[self.game.player_sub_sheet]) 
         self.camera.set(self.player_origin)
         self.entities.append(self.player)
         self.phase = "island"
@@ -729,21 +805,28 @@ class CampaignScene(Scene):
                 tile = self.tilemap.get_tile(node)
                 tile.logistical_sea_route = True
         self.map_traffic_points = self.djikstra_map_sea_traffic()
-        self.sim_event_place_resupply_vessel() 
+        self.sim_event_place_fleets() 
         self.active_front_tiles = []
         self.next_front_shift = 0
         self.map_fronts = self.map_front_lines()
         self.active_front_line_tiles = []
 
-    def sim_event_place_resupply_vessel(self):
+    def sim_event_place_fleets(self):
         x, y = self.invasion_target.xy_tuple
-        spots = list(filter(lambda x: x.tile_type == "ocean" and not x.coast, \
-            valid_tiles_in_range_of(self.tilemap.tiles, (x, y), MISSION_RADIUS)))
-        origin = choice(spots).xy_tuple
-        resupply_vessel = AlliedFleet(origin, self.game.entity_sheets[self.game.allied_fleet_sheet]) 
-        self.tilemap.toggle_occupied(origin, True)
-        self.entities.append(resupply_vessel)
-        self.push_to_console("ATTN: Allied Fleet at: {}".format(origin))
+        for _ in range(MISSION_ZONE_FLEETS_PER_SIDE):
+            spots = list(filter(lambda x: x.tile_type == "ocean" and not x.coast and not x.occupied, \
+                valid_tiles_in_range_of(self.tilemap.tiles, (x, y), MISSION_RADIUS)))
+            origin = choice(spots).xy_tuple
+            fleet = AlliedFleet(origin, self.game.entity_sheets[self.game.allied_fleet_sheet]) 
+            self.tilemap.toggle_occupied(origin, True)
+            self.entities.append(fleet)
+        for _ in range(MISSION_ZONE_FLEETS_PER_SIDE):
+            spots = list(filter(lambda x: x.tile_type == "ocean" and not x.coast and not x.occupied, \
+                valid_tiles_in_range_of(self.tilemap.tiles, (x, y), MISSION_RADIUS)))
+            origin = choice(spots).xy_tuple
+            fleet = EnemyFleet(origin, self.game.entity_sheets[self.game.enemy_fleet_sheet]) 
+            self.tilemap.toggle_occupied(origin, True)
+            self.entities.append(fleet)
 
     def djikstra_map_sea_traffic(self) -> list:
         w, h = self.tilemap.wh_tuple
@@ -760,6 +843,11 @@ class CampaignScene(Scene):
         w, h = self.tilemap.wh_tuple
         front_map = [] 
         active_front_line_tiles = []
+        def crater(tile):
+            tile.crater_index = randrange(0, 6)
+            tile.crater_eta = self.time_units_passed + randint(CRATER_ETA_RANGE[0], CRATER_ETA_RANGE[1])
+            if tile not in self.cratered_tiles:
+                self.cratered_tiles.append(tile)
         for x in range(w):
             front_map.append([])
             for y in range(h):
@@ -771,10 +859,14 @@ class CampaignScene(Scene):
                     front_map[x].append("allied")
                     active_front_line_tiles.append(((x, y), "allied"))
                     tile.front_line_index = randrange(0, 4)
+                    if tile.tile_type == "land":
+                        crater(tile)
                 elif enemy_front:
                     front_map[x].append("enemy")
                     active_front_line_tiles.append(((x, y), "enemy"))
                     tile.front_line_index = randrange(0, 4)
+                    if tile.tile_type == "land":
+                        crater(tile)
                 else:
                     front_map[x].append(False)
         self.active_front_line_tiles = active_front_line_tiles
@@ -815,7 +907,7 @@ class CampaignScene(Scene):
             "___NOTES___", "",
             "> Your goal is to survive until the campaign is over. You only take the risks",
             "you choose to take, but to get a high score you will have to take some.", "",
-            "> Seek the allied fleet in the mission area if you need more ammunition.",
+            "> Seek the allied fleets near the mission area if you need more ammunition.",
             "You can also resupply at friendly ports, once some are taken.", "",
             "> If you take minor damage, find a spot outside the shipping lanes to wait and",
             "do some field repairs. You can repair faster at any ports we have taken.", "",
@@ -834,23 +926,37 @@ class CampaignScene(Scene):
         if self.phase == "island":
             potentials = list(filter(lambda x: x.island and x.coast and x.faction == "enemy", \
                 self.tilemap.all_tiles()))
-            if len(potentials) == 0:
+            if len(potentials) > 0:
+                sorted_potentials = sorted_by_distance_to(self.player_origin, potentials, manhattan_distance)
+                pick = sorted_potentials[0][2]
+            elif len(potentials) == 0:
                 self.phase = "mainland"
         if self.phase == "mainland":
             potentials = list(filter(lambda x: x.mainland and x.coast and x.faction == "enemy", \
                 self.tilemap.all_tiles()))
-        return choice(potentials)
+            pick = choice(potentials)
+        return pick
 
     def sim_event_encounter_check(self): 
+        if self.game.no_encounters == True:
+            self.set_processing_event_done("sim_event_encounter_check")
+            return
         if self.time_units_passed % ENCOUNTER_CHECK_TU_FREQ == 0:
             x, y = self.player.xy_tuple
             traffic_points = self.map_traffic_points[x][y]
+            nearby_enemy_fleets = len(list(filter(lambda z: z.name == "enemy fleet" \
+                and manhattan_distance((x, y), z.xy_tuple) <= ENEMY_FLEET_ASW_RADIUS, self.entities)))
+            nearby_enemy_cities = len(list(filter(lambda z: z.tile_type == "city" and z.faction == "enemy", \
+                valid_tiles_in_range_of(self.tilemap.tiles, (x, y), NEARBY_CITY_ASW_RADIUS, manhattan=True))))
             if roll_shipping_encounter(traffic_points) <= 0:
                 loading_screen(self.game.loader_bg)
                 self.sim_event_shipping_encounter(traffic_points)
-            elif roll_asw_encounter(traffic_points) <= 0:
+            elif roll_asw_encounter(traffic_points, mods=[nearby_enemy_fleets, nearby_enemy_cities]) <= 0:
                 loading_screen(self.game.loader_bg)
                 self.sim_event_asw_encounter(traffic_points)
+            elif self.game.testing_encounter:
+                self.sim_event_shipping_encounter(4) 
+                self.game.testing_encounter = False 
         self.set_processing_event_done("sim_event_encounter_check")
 
     def sim_event_asw_encounter(self, traffic_points):
@@ -902,6 +1008,8 @@ class CampaignScene(Scene):
 
     def encounter_post_check(self):
         if self.had_encounter and self.game.current_scene is self:
+            self.speed = GAME_UPDATE_TICK_MS
+            pygame.time.set_timer(self.game.GAME_UPDATE_TICK_CAMPAIGN, self.speed)
             self.game_over_check()
             self.game.encounters_had += 1
             self.had_encounter = False
@@ -920,6 +1028,10 @@ class CampaignScene(Scene):
     def update_front_lines(self):
         if self.time_units_passed % UPDATE_FRONT_LINES_CHECK_TU_FREQ == 0:
             self.map_fronts = self.map_front_lines()
+            for fleet in list(filter(lambda x: (x.name == "allied fleet" or x.name == "enemy fleet") and x.engaged, \
+                self.entities)):
+                if roll_for_fleet_explosion():
+                    self.explosions.append(Explosion(fleet.xy_tuple, self.game.big_explosion_sheet))
         self.set_processing_event_done("update_front_lines")
 
     def sim_event_extra_lives_check(self):
@@ -983,14 +1095,14 @@ class CampaignScene(Scene):
                     self.invasion_target = self.select_invasion_target()
                     self.invasion_eta = self.get_invasion_eta()
                     self.briefing_splash = self.generate_big_splash_txt_surf(self.generate_invasion_brief_txt_lines())
+                    self.paused = True
                     self.mission_tiles = self.get_mission_tiles()
                     self.displaying_briefing_splash = True
-                    resupply_ship = first(lambda x: x.name == "allied fleet", self.entities)
-                    if resupply_ship is not None:
-                        self.tilemap.toggle_occupied(resupply_ship.xy_tuple, False)
-                        if resupply_ship in self.entities:
-                            self.entities.remove(resupply_ship)
-                        self.sim_event_place_resupply_vessel()
+                    fleets = list(filter(lambda x: x.name == "allied fleet" or x.name == "enemy fleet", self.entities))
+                    for fleet in fleets:
+                        self.tilemap.toggle_occupied(fleet.xy_tuple, False)
+                    self.entities = list(filter(lambda x: x not in fleets, self.entities))
+                    self.sim_event_place_fleets()
         self.set_processing_event_done("sim_event_run_warsim")
 
     def game_over_check(self):
@@ -1065,6 +1177,9 @@ class CampaignScene(Scene):
             self.extra_lives -= 1
             self.game.extra_lives_used += 1
             self.update_mini_map()
+            self.player.get_ability("torpedo").ammo = PLAYER_DEFAULT_TORPS
+            self.player.get_ability("missile").ammo = PLAYER_DEFAULT_MISSILES
+            self.alerts.append(HudAlert(self.game.alerts["respawned"]))
             return True
 
     def sim_event_repair_check(self):
@@ -1081,18 +1196,21 @@ class CampaignScene(Scene):
                 self.player.change_hp(amt)
                 self.push_to_console("{} HP repaired in the field!".format(amt))
                 self.last_repair_check = self.time_units_passed
+                self.alerts.append(HudAlert(self.game.alerts["repaired"]))
         self.set_processing_event_done("sim_event_repair_check")
 
     def sim_event_resupply_check(self):
         if self.time_units_passed % RESUPPLY_CHECK_TU_FREQ == 0:
-            resupply_ship = first(lambda x: x.name == "allied fleet", self.entities)
-            resupply_ship_in_range = resupply_ship is not None and chebyshev_distance(self.player.xy_tuple, \
-                resupply_ship.xy_tuple) <= 1
+            allied_fleets_in_range = list(filter(lambda x: x.name == "allied fleet" \
+                and chebyshev_distance(self.player.xy_tuple, x.xy_tuple) <= 1, self.entities))
+            all_nearby_allied_fleets_engaged = len(list(filter(lambda x: not x.engaged, allied_fleets_in_range))) == 0 \
+                and len(allied_fleets_in_range) > 0
+            can_resupply_from_fleet = len(allied_fleets_in_range) > 0 and not all_nearby_allied_fleets_engaged
             next_to_city = first(lambda x: x.tile_type == "city" and x.faction == "allied", \
                 self.tilemap.neighbors_of(self.player.xy_tuple)) is not None
             needs_ammo = self.player.torps < PLAYER_DEFAULT_TORPS or self.player.missiles < PLAYER_DEFAULT_MISSILES
-            if (resupply_ship_in_range or next_to_city) and needs_ammo:
-                if resupply_ship_in_range:
+            if (can_resupply_from_fleet or next_to_city) and needs_ammo:
+                if can_resupply_from_fleet:
                     source = "allied fleet"
                 elif next_to_city:
                     source = "friendly port"
@@ -1100,6 +1218,9 @@ class CampaignScene(Scene):
                 self.player.missiles = PLAYER_DEFAULT_MISSILES
                 self.push_to_console("Fresh ammo from {}!".format(source))
                 self.game.times_resupplied += 1
+                self.alerts.append(HudAlert(self.game.alerts["resupplied"]))
+            elif all_nearby_allied_fleets_engaged:
+                self.push_to_console("Can't resupply. The fleet is engaged!")
         self.set_processing_event_done("sim_event_resupply_check")
 
     def move_entity(self, entity, direction) -> bool:
@@ -1132,6 +1253,10 @@ class CampaignScene(Scene):
                     self.push_to_console("Leaving Mission Zone")
                     self.player_in_mission_zone = False
             self.tilemap.toggle_occupied(entity.xy_tuple, False)
+            if entity.name in wake_causing_entities:
+                wake = Wake(entity.xy_tuple, entity, self.time_units_passed + WAKE_ETA, direction, \
+                    self.game.entity_sheets[self.game.wake_sheet])
+                self.wakes.append(wake)
             entity.xy_tuple = target_xy_tuple
             self.tilemap.toggle_occupied(entity.xy_tuple, True)
             if entity.player and camera_coupled:
@@ -1154,14 +1279,44 @@ class CampaignScene(Scene):
         return False
 
     def run_entity_behavior(self): 
-        can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed \
-            and not x.name == "allied fleet", self.entities))
+        can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed, self.entities))
         for entity in can_move:
+            if entity.name == "allied fleet" or entity.name == "enemy fleet":
+                self.entity_ai_fleet(entity) 
             if entity.player:
                 self.move_entity(self.player, self.player.orientation) 
         self.time_units_passed += 1
         self.calendar.advance("campaign")
         self.set_processing_event_done("run_entity_behavior")
+
+    # Moves an entity in a completely random direction
+    def entity_ai_random_move(self, entity):
+        if self.log_ai_routines:
+            print("entity_ai_random_move()")
+        direction = choice(list(DIRECTIONS.keys())) 
+        self.move_entity(entity, direction)
+
+    def entity_ai_fleet(self, entity):
+        if entity.engaged: 
+            if entity.name == "enemy fleet" and entity.engagement_eta is not None \
+                and self.time_units_passed > entity.engagement_eta:
+                self.explosions.append(Explosion(entity.xy_tuple, self.game.big_explosion_sheet))
+                self.entities.remove(entity)
+                self.tilemap.toggle_occupied(entity.xy_tuple, False)
+            elif entity.name == "allied fleet":
+                opposing_forces = list(filter(lambda x: chebyshev_distance(x.xy_tuple, entity.xy_tuple) <= 1 \
+                    and x.name == "enemy fleet", self.entities))
+                if len(opposing_forces) == 0:
+                    entity.engaged = False
+        elif not entity.engaged:
+            if roll_for_fleet_movement():
+                self.entity_ai_random_move(entity)
+            opposing_forces = list(filter(lambda x: chebyshev_distance(x.xy_tuple, entity.xy_tuple) <= 1 \
+                and x.faction != entity.faction \
+                and (x.name == "allied fleet" or x.name == "enemy fleet"), self.entities))
+            if len(opposing_forces) > 0:
+                entity.set_engaged(tu=self.time_units_passed)
+                apply(lambda x: x.set_engaged(tu=self.time_units_passed), opposing_forces) 
 
     def dead_entity_check(self):
         new_entities = list(filter(lambda x: not x.dead, self.entities))
@@ -1214,11 +1369,15 @@ class CampaignScene(Scene):
             self.screen.blit(surf, pos)
 
     def draw_player_stats(self):
+        if self.speed == GAME_UPDATE_TICK_FAST_MS:
+            cmpr_str = "(>)"
+        else:
+            cmpr_str = ""
         line_height = HUD_FONT_SIZE + 1
         stats_lines = [
             "Score: {}".format(self.game.total_score),
             "Day: {}".format(self.calendar.day),
-            "Time: {}".format(self.calendar.clock_string()),
+            "Time:{} {}".format(cmpr_str, self.calendar.clock_string()),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
             "Extra Lives: {}".format(self.extra_lives),
             "Loc: {}".format(self.player.xy_tuple),
@@ -1257,14 +1416,38 @@ class CampaignScene(Scene):
         self.master_surface = self.update_master_surface(changed_tiles, clear=True)
         self.screen.blit(self.master_surface, (0, 0), area=area_rect)
 
+        def on_screen(xy_tuple) -> bool:
+            x, y = xy_tuple
+            return x >= topleft[0] \
+                and y >= topleft[1] \
+                and x < topleft[0] + self.screen_wh_cells_tuple[0] \
+                and y < topleft[1] + self.screen_wh_cells_tuple[1]
+
+        # hud alerts
+        for alert in self.alerts:
+            x, y = (self.camera.xy_tuple[0] - topleft[0]) * CELL_SIZE - alert.surf.get_width() // 2, \
+                (self.camera.xy_tuple[1] - topleft[1]) * CELL_SIZE - alert.offset
+            self.screen.blit(alert.surf, (x, y))
         # draw entities:
         if self.debug:
             visible_entities = self.entities
         else:
             visible_entities = list(filter(lambda x: not x.hidden, self.entities))
+        for tile in self.cratered_tiles:
+            x, y = tile.xy_tuple
+            if on_screen((x, y)):
+                rect = ((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE, CELL_SIZE, CELL_SIZE) 
+                img = grab_cell_from_sheet(self.game.craters_sheet, tile.crater_index)
+                self.screen.blit(img, rect)
+        for wake in self.wakes:
+            x, y = wake.xy_tuple
+            if on_screen((x, y)):
+                rect = ((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE, CELL_SIZE, CELL_SIZE) 
+                img = wake.get_drawn()
+                self.screen.blit(img, rect)
         for entity in visible_entities:
             x, y = entity.xy_tuple 
-            if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
+            if on_screen((x, y)):
                 rect = ((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE, CELL_SIZE, CELL_SIZE) 
                 img = entity.get_drawn()
                 self.screen.blit(img, rect)
@@ -1277,7 +1460,7 @@ class CampaignScene(Scene):
             x, y = tile[0]
             front_line_index = self.tilemap.get_tile((x, y)).front_line_index
             faction = self.tilemap.get_tile((x, y)).faction
-            if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
+            if on_screen((x, y)):
                 rect = ((x - topleft[0]) * CELL_SIZE, (y - topleft[1]) * CELL_SIZE, CELL_SIZE, CELL_SIZE)
                 if faction == "allied":
                     img = grab_cell_from_sheet(self.game.allied_front_line_sheet, front_line_index)
@@ -1285,14 +1468,19 @@ class CampaignScene(Scene):
                     img = grab_cell_from_sheet(self.game.enemy_front_line_sheet, front_line_index)
                 self.screen.blit(img, (rect[0], rect[1]))
         for explosion in self.explosions:
-            x, y = (explosion.xy_tuple[0] - topleft[0]) * CELL_SIZE, (explosion.xy_tuple[1] - topleft[1]) * CELL_SIZE
-            img = explosion.get_drawn()
-            self.screen.blit(img, (x, y))
+            if on_screen(explosion.xy_tuple):
+                x, y = (explosion.xy_tuple[0] - topleft[0]) * CELL_SIZE, (explosion.xy_tuple[1] - topleft[1]) * CELL_SIZE
+                img = explosion.get_drawn()
+                self.screen.blit(img, (x, y))
 
 class TacticalScene(Scene):
     def __init__(self, game): 
         super().__init__(game)
         self.tilemap = TileMap(MAP_SIZE, "open ocean")
+        self.animating_weapons = []
+        self.missiles_are_animating = False
+        self.hunted = False
+        self.on_cooldown = False
         self.processing_events = {
             "run_entity_behavior": [pygame.event.custom_type(), self.run_entity_behavior, False, None],
             "stealth_check": [pygame.event.custom_type(), self.stealth_check, False, "run_entity_behavior"],
@@ -1310,6 +1498,9 @@ class TacticalScene(Scene):
             "dead_entity_check": [pygame.event.custom_type(), self.dead_entity_check, False, "run_entity_behavior"],
             "update_mini_map": [pygame.event.custom_type(), self.update_mini_map, False, "run_entity_behavior"],
             "explosion_check": [pygame.event.custom_type(), self.explosion_check, False, None],
+            "wake_check": [pygame.event.custom_type(), self.wake_check, False, "run_entity_behavior"],
+            "animated_weapons_check": [pygame.event.custom_type(), self.animated_weapons_check, False, None],
+            "cooldown_check": [pygame.event.custom_type(), self.cooldown_check, False, None],
         }
         pygame.time.set_timer(self.game.GAME_UPDATE_TICK_TACTICAL, GAME_UPDATE_TICK_MS)
         pygame.time.set_timer(self.game.MISSION_OVER_CHECK_RESET_CONFIRM, CONFIRM_RESET_TICK_MS)
@@ -1319,96 +1510,13 @@ class TacticalScene(Scene):
         self.master_surface_zoomed_out = self.update_master_surface(changed_tiles, reset=True, zoomed_out=True, \
             clear=True)
         self.mini_map = MiniMap(self, "tactical")
-        self.psonar_overlay_cell = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
-        self.psonar_overlay_cell_zoomed_out = pygame.Surface((ZOOMED_OUT_CELL_SIZE, ZOOMED_OUT_CELL_SIZE), \
-            flags=SRCALPHA)
-        self.psonar_overlay_cell.fill(SONAR_OVERLAY_COLOR)
-        self.psonar_overlay_cell_zoomed_out.fill(SONAR_OVERLAY_COLOR)
-        self.radar_overlay_cell = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
-        self.radar_overlay_cell_zoomed_out = pygame.Surface((ZOOMED_OUT_CELL_SIZE, ZOOMED_OUT_CELL_SIZE), \
-            flags=SRCALPHA)
-        self.radar_overlay_cell.fill(RADAR_OVERLAY_COLOR)
-        self.radar_overlay_cell_zoomed_out.fill(RADAR_OVERLAY_COLOR)
-        self.targeting_overlay_cell = pygame.Surface((CELL_SIZE, CELL_SIZE), flags=SRCALPHA)
-        self.targeting_overlay_cell_zoomed_out = pygame.Surface((ZOOMED_OUT_CELL_SIZE, ZOOMED_OUT_CELL_SIZE), \
-            flags=SRCALPHA)
-        self.targeting_overlay_cell.fill(HUD_OPAQUE_RED)
-        self.targeting_overlay_cell_zoomed_out.fill(HUD_OPAQUE_RED)
-        self.player_sonar_overlay_surface = pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * CELL_SIZE, \
-            (PASSIVE_SONAR_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
-        self.player_sonar_overlay_surface.set_colorkey(ALPHA_KEY)
-        self.player_sonar_overlay_surface.fill(ALPHA_KEY)
-        self.player_radar_overlay_surface = pygame.Surface(((RADAR_RANGE * 2 + 1) * CELL_SIZE, \
-            (RADAR_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
-        self.player_radar_overlay_surface.set_colorkey(ALPHA_KEY)
-        self.player_radar_overlay_surface.fill(ALPHA_KEY)
-        self.player_sonar_overlay_surface_zoomed_out = \
-            pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
-            (PASSIVE_SONAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
-        self.player_sonar_overlay_surface_zoomed_out.set_colorkey(ALPHA_KEY)
-        self.player_sonar_overlay_surface_zoomed_out.fill(ALPHA_KEY)
-        self.player_radar_overlay_surface_zoomed_out = pygame.Surface(((RADAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
-            (RADAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
-        self.player_radar_overlay_surface.set_colorkey(ALPHA_KEY)
-        self.player_radar_overlay_surface.fill(ALPHA_KEY)
-        self.player_torpedo_range_overlay_surface = pygame.Surface(((TORPEDO_RANGE * 2 + 1) * CELL_SIZE, \
-            (TORPEDO_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
-        self.player_torpedo_range_overlay_surface.set_colorkey(ALPHA_KEY)
-        self.player_torpedo_range_overlay_surface.fill(ALPHA_KEY)
-        self.player_torpedo_range_overlay_surface_zoomed_out = \
-            pygame.Surface(((TORPEDO_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
-            (TORPEDO_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
-        self.player_torpedo_range_overlay_surface_zoomed_out.set_colorkey(ALPHA_KEY)
-        self.player_torpedo_range_overlay_surface_zoomed_out.fill(ALPHA_KEY)
-        self.player_missile_range_overlay_surface_zoomed_out = \
-            pygame.Surface(((MISSILE_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
-            (MISSILE_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
-        self.player_missile_range_overlay_surface_zoomed_out.set_colorkey(ALPHA_KEY)
-        self.player_missile_range_overlay_surface_zoomed_out.fill(ALPHA_KEY)
-        self.player_missile_range_overlay_surface = pygame.Surface(((MISSILE_RANGE * 2 + 1) * CELL_SIZE, \
-            (MISSILE_RANGE * 2 + 1) * CELL_SIZE), flags=SRCALPHA)
-        self.player_missile_range_overlay_surface.set_colorkey(ALPHA_KEY)
-        self.player_missile_range_overlay_surface.fill(ALPHA_KEY)
-        self.enemy_sonar_overlay = pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * CELL_SIZE, \
-            (PASSIVE_SONAR_RANGE* 2 + 1) * CELL_SIZE), flags=SRCALPHA)
-        self.enemy_sonar_overlay.set_colorkey(ALPHA_KEY)
-        self.enemy_sonar_overlay.fill(ALPHA_KEY)
-        self.enemy_sonar_overlay_zoomed_out = pygame.Surface(((PASSIVE_SONAR_RANGE * 2 + 1) * ZOOMED_OUT_CELL_SIZE, \
-            (PASSIVE_SONAR_RANGE* 2 + 1) * ZOOMED_OUT_CELL_SIZE), flags=SRCALPHA)
-        self.enemy_sonar_overlay_zoomed_out.set_colorkey(ALPHA_KEY)
-        self.enemy_sonar_overlay_zoomed_out.fill(ALPHA_KEY)
-        overlays = [
-            {"overlay": self.player_sonar_overlay_surface, "color": SONAR_OVERLAY_COLOR, \
-                "rad": PASSIVE_SONAR_RANGE, "size": CELL_SIZE},
-            {"overlay": self.player_torpedo_range_overlay_surface, "color": HUD_OPAQUE_RED, \
-                "rad": TORPEDO_RANGE, "size": CELL_SIZE},
-            {"overlay": self.player_radar_overlay_surface, "color": RADAR_OVERLAY_COLOR, "rad": RADAR_RANGE, \
-                "size": CELL_SIZE},
-            {"overlay": self.player_missile_range_overlay_surface, "color": HUD_OPAQUE_RED, \
-                "rad": MISSILE_RANGE, "size": CELL_SIZE},
-            {"overlay": self.player_radar_overlay_surface_zoomed_out, "color": RADAR_OVERLAY_COLOR, \
-                "rad": RADAR_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
-            {"overlay": self.player_sonar_overlay_surface_zoomed_out, "color": SONAR_OVERLAY_COLOR, \
-                "rad": PASSIVE_SONAR_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
-            {"overlay": self.player_torpedo_range_overlay_surface_zoomed_out, \
-                "color": HUD_OPAQUE_RED, "rad": TORPEDO_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
-            {"overlay": self.player_missile_range_overlay_surface_zoomed_out, \
-                "color": HUD_OPAQUE_RED, "rad": MISSILE_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
-            {"overlay": self.enemy_sonar_overlay, "color": ENEMY_SONAR_OVERLAY_COLOR, "rad": PASSIVE_SONAR_RANGE, \
-                "size": CELL_SIZE},
-            {"overlay": self.enemy_sonar_overlay_zoomed_out, "color": ENEMY_SONAR_OVERLAY_COLOR, \
-                "rad": PASSIVE_SONAR_RANGE, "size": ZOOMED_OUT_CELL_SIZE},
-        ]
-        for overlay in overlays: 
-            print(overlay)
-            w = overlay["overlay"].get_width() // overlay["size"]
-            h = overlay["overlay"].get_height() // overlay["size"]
-            origin = (w // 2, h // 2) 
-            for x in range(w):
-                for y in range(h):
-                    if manhattan_distance(origin, (x, y)) <= overlay["rad"] and (x, y) != origin:
-                        rect = (x * overlay["size"], y * overlay["size"], overlay["size"], overlay["size"])
-                        pygame.draw.rect(overlay["overlay"], overlay["color"], rect)
+
+    def cooldown_check(self):
+        on_cooldown = self.player.on_cooldown(self.time_units_passed)
+        if self.on_cooldown and not on_cooldown:
+            self.alerts.append(HudAlert(self.game.alerts["cooldown"]))
+        self.on_cooldown = on_cooldown
+        self.set_processing_event_done("cooldown_check")
 
     def explosion_check(self):
         if self.time_units_passed % EXPLOSION_CHECK_TU_FREQ == 0:
@@ -1416,6 +1524,24 @@ class TacticalScene(Scene):
                 if entity.explosion is not None and entity.explosion.done:
                     entity.explosion = None
         self.set_processing_event_done("explosion_check")
+
+    def animated_weapons_check(self):
+        if self.time_units_passed % ANIMATED_WEAPONS_CHECK_TU_FREQ == 0:
+            removed = []
+            for weapon in self.animating_weapons:
+                if weapon.animation_complete or weapon.target is None or weapon.target.dead:
+                    removed.append(weapon)
+            self.animating_weapons = list(filter(lambda x: x not in removed, self.animating_weapons))
+        self.set_processing_event_done("animated_weapons_check") 
+
+    def wake_check(self):
+        if self.time_units_passed % WAKE_CHECK_TU_FREQ == 0:
+            removed = []
+            for wake in self.wakes:
+                if self.time_units_passed > wake.eta:
+                    removed.append(wake)
+            self.wakes = list(filter(lambda x: x not in removed, self.wakes))
+        self.set_processing_event_done("wake_check")
 
     def update_master_surface(self, changed_tiles, reset=False, zoomed_out=False, clear=False):
         if zoomed_out:
@@ -1440,21 +1566,17 @@ class TacticalScene(Scene):
             x, y = tile.xy_tuple
             rect = (x * cell_size, y * cell_size, cell_size, cell_size)
             if tile.tile_type == "ocean":
-                #pygame.draw.rect(surf, "navy", rect)
                 if zoomed_out:
                     cell = grab_cell_from_sheet(self.game.open_ocean_sheet, randint(0, 5), zoomed_out=True)
                 else:
                     cell = grab_cell_from_sheet(self.game.open_ocean_sheet, randint(0, 5))
                 surf.blit(cell, (rect[0], rect[1]))
             elif tile.tile_type == "land":
-                #pygame.draw.rect(surf, "olive", rect) 
                 if zoomed_out:
                     cell = grab_cell_from_sheet(self.game.land_sheet, randint(0, 5), zoomed_out=True)
                 else:
                     cell = grab_cell_from_sheet(self.game.land_sheet, randint(0, 5))
                 surf.blit(cell, (rect[0], rect[1]))
-            #if not zoomed_out:
-            #    pygame.draw.rect(surf, "gray", rect, 1)
         if clear:
             self.tilemap.changed_tiles = []
         if len(changed_tiles) > 0:
@@ -1473,7 +1595,12 @@ class TacticalScene(Scene):
     def generate_encounter(self, mission, calendar):
         for _, v in self.processing_events.items():
             v[2] = False
+        self.speed = GAME_UPDATE_TICK_MS
+        pygame.time.set_timer(self.game.GAME_UPDATE_TICK_TACTICAL, self.speed)
+        self.hunted = False
         self.tilemap.set_all_unoccupied()
+        self.wakes = []
+        self.animating_weapons = []
         self.paused = True
         self.displaying_torpedo_range_overlay = False
         self.displaying_missile_range_overlay = False
@@ -1705,6 +1832,10 @@ class TacticalScene(Scene):
         elif self.entity_can_move(entity, direction):
             entity.frame_orientation = direction
             self.tilemap.toggle_occupied(entity.xy_tuple, False)
+            if entity.name in wake_causing_entities:
+                wake = Wake(entity.xy_tuple, entity, self.time_units_passed + WAKE_ETA, direction, \
+                    self.game.entity_sheets[self.game.wake_sheet])
+                self.wakes.append(wake)
             entity.xy_tuple = target_xy_tuple
             self.tilemap.toggle_occupied(entity.xy_tuple, True)
             if entity.player and camera_coupled:
@@ -1867,7 +1998,14 @@ class TacticalScene(Scene):
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + MISSILE_SPEED * distance
             eta_str = self.calendar.get_eta_str(self.time_units_passed, eta, "tactical")
-            target.missiles_incoming.append(LaunchedWeapon(eta, launcher, target, missile_range))
+            if self.zoomed_out:
+                cell_size = ZOOMED_OUT_CELL_SIZE
+            else:
+                cell_size = CELL_SIZE
+            missile = Missile(eta, launcher, target, missile_range, self.game.entity_sheets[self.game.missile_sheet], \
+                cell_size, known=True)
+            target.missiles_incoming.append(missile)
+            self.animating_weapons.append(missile)
             self.push_to_console_if_player("MISSILE LAUNCHED! (eta: {})".format(eta_str), [launcher], \
                 tag="combat")
             self.targeting_ability.change_ammo(-1)
@@ -1906,7 +2044,14 @@ class TacticalScene(Scene):
             distance = manhattan_distance(launcher.xy_tuple, target.xy_tuple)
             eta = self.time_units_passed + TORPEDO_SPEED * distance
             eta_str = self.calendar.get_eta_str(self.time_units_passed, eta, "tactical")
-            target.torpedos_incoming.append(LaunchedWeapon(eta, launcher, target, torp_range, known=is_known))
+            if self.zoomed_out:
+                cell_size = ZOOMED_OUT_CELL_SIZE
+            else:
+                cell_size = CELL_SIZE
+            torp = Torpedo(eta, launcher, target, torp_range, self.game.entity_sheets[self.game.torpedo_sheet], \
+                cell_size, known=is_known)
+            target.torpedos_incoming.append(torp)
+            self.animating_weapons.append(torp)
             self.push_to_console_if_player("TORPEDO LAUNCHED! (eta: {})".format(eta_str), [launcher], \
                 tag="combat")
             torps = launcher.get_ability("torpedo")
@@ -1983,6 +2128,7 @@ class TacticalScene(Scene):
             if target.dead:
                 dmg_msg = "{} destroyed by missile!".format(target.detected_str())
                 if target.player:
+                    # NOTE: Nothing yet in game will target the player with a missile.
                     self.mission.player_fate = "Destroyed by {}'s missile!".format(launcher.name)
             else:
                 dmg_msg = "{} takes {} damage from a missile! ({} / {})".format(target.detected_str(), dmg, \
@@ -2004,6 +2150,7 @@ class TacticalScene(Scene):
             self.push_to_console_if_player(msg, [launcher, target], tag="combat")
             if target.player:
                 self.game.torpedos_evaded += 1
+                self.alerts.append(HudAlert(self.game.alerts["evaded"]))
         elif not target.dead:
             target.raise_alert_level(AlertLevel.ENGAGED)
             dmg = roll_torpedo_damage()
@@ -2012,6 +2159,7 @@ class TacticalScene(Scene):
             self.explosions.append(Explosion(target.xy_tuple, self.game.big_explosion_sheet))
             if target.player:
                 self.game.total_damage_taken += taken
+                self.alerts.append(HudAlert(self.game.alerts["damaged"]))
             if target.dead:
                 dmg_msg = "{} destroyed by torpedo!".format(target.name, dmg)
                 if target.player:
@@ -2157,7 +2305,11 @@ class TacticalScene(Scene):
 
     def player_being_hunted(self) -> bool:
         chasing = first(lambda x: x.chasing, self.entities) is not None
-        return chasing or self.player_in_enemy_contacts
+        hunted = chasing or self.player_in_enemy_contacts
+        if not self.hunted and hunted:
+            self.alerts.append(HudAlert(self.game.alerts["hunted"]))
+        self.hunted = hunted
+        return hunted
 
     def ended_mission(self) -> bool:
         if pygame.key.get_pressed()[K_e] and self.ctrl_pressed():
@@ -2349,6 +2501,7 @@ class TacticalScene(Scene):
                 if torp.eta <= self.time_units_passed:
                     self.sim_event_torpedo_arrival(torp)
                     arrived.append(torp)
+                    torp.animation_complete = True
             for torp in arrived:
                 entity.torpedos_incoming.remove(torp)
         self.set_processing_event_done("torpedo_arrival_check")
@@ -2363,6 +2516,7 @@ class TacticalScene(Scene):
             for missile in entity.missiles_incoming:
                 if missile.eta <= self.time_units_passed:
                     self.sim_event_missile_arrival(missile)
+                    missile.animation_complete = True
                     arrived.append(missile)
             for missile in arrived:
                 if missile in entity.missiles_incoming:
@@ -2609,7 +2763,6 @@ class TacticalScene(Scene):
 
     def run_entity_behavior(self): 
         if not self.mission_over:
-            print("{}".format(list(map(lambda x: x.id, self.entities))))
             can_move = list(filter(lambda x: x.next_move_time <= self.time_units_passed, self.entities))
             for entity in can_move:
                 if entity.name == "small convoy escort":
@@ -2713,10 +2866,14 @@ class TacticalScene(Scene):
                 "tactical")
         else:
             cooldown_str = "NOW"
+        if self.speed == GAME_UPDATE_TICK_FAST_MS:
+            cmpr_str = "(>)"
+        else:
+            cmpr_str = ""
         line_height = HUD_FONT_SIZE + 1
         stats_lines = [
             "Day: {}".format(self.calendar.day),
-            "Time: {}".format(self.calendar.clock_string(seconds=True)),
+            "Time:{} {}".format(cmpr_str, self.calendar.clock_string(seconds=True)),
             "HP: {}/{}".format(self.player.hp["current"], self.player.hp["max"]),
             "Hunted: {}".format(self.player_being_hunted()),
             "Inc. Torps: {}".format(len(self.player.known_torpedos())), 
@@ -2765,6 +2922,16 @@ class TacticalScene(Scene):
             y = HUD_Y_EGDE_PADDING
         self.screen.blit(abilities_surface, (0, y)) 
 
+    def get_topleft(self, relative_to=None) -> tuple:
+        if self.zoomed_out:
+            wh_tuple = self.screen_wh_cells_tuple_zoomed_out
+        else:
+            wh_tuple = self.screen_wh_cells_tuple
+        if relative_to is not None:
+            return (relative_to.xy_tuple[0] - wh_tuple[0] // 2, relative_to.xy_tuple[1] - wh_tuple[1] // 2)
+        else:
+            return (self.camera.xy_tuple[0] - wh_tuple[0] // 2, self.camera.xy_tuple[1] - wh_tuple[1] // 2)
+
     def draw_level(self):
         if self.zoomed_out:
             cell_size = ZOOMED_OUT_CELL_SIZE
@@ -2772,8 +2939,14 @@ class TacticalScene(Scene):
         else:
             cell_size = CELL_SIZE
             wh_tuple = self.screen_wh_cells_tuple
-        topleft = (self.camera.xy_tuple[0] - wh_tuple[0] // 2, self.camera.xy_tuple[1] - wh_tuple[1] // 2)
+        topleft = self.get_topleft()
         area_rect = (topleft[0] * cell_size, topleft[1] * cell_size, wh_tuple[0] * cell_size, wh_tuple[1] * cell_size)
+        def on_screen(xy_tuple) -> bool:
+            x, y = xy_tuple
+            return x >= topleft[0] \
+                and y >= topleft[1] \
+                and x < topleft[0] + wh_tuple[0] \
+                and y < topleft[1] + wh_tuple[1]
         # draw tilemap
         changed_tiles = self.tilemap.changed_tiles
         if self.zoomed_out:
@@ -2785,11 +2958,23 @@ class TacticalScene(Scene):
         else:
             player_contacts_entities = list(map(lambda x: x.entity, self.player.contacts))
         visible_entities = list(filter(lambda x: x in player_contacts_entities, self.entities)) + [self.player]
+        # hud alerts
+        for alert in self.alerts:
+            x, y = (self.camera.xy_tuple[0] - topleft[0]) * cell_size - alert.surf.get_width() // 2, \
+                (self.camera.xy_tuple[1] - topleft[1]) * cell_size - alert.offset
+            self.screen.blit(alert.surf, (x, y))
         # draw entities:
+        for wake in self.wakes:
+            contact = first(lambda x: x.entity is wake.entity, self.player.contacts)
+            x, y = wake.xy_tuple
+            if on_screen((x, y)) and contact is not None:
+                rect = ((x - topleft[0]) * cell_size, (y - topleft[1]) * cell_size, cell_size, cell_size) 
+                img = wake.get_drawn(zoomed_out=self.zoomed_out)
+                self.screen.blit(img, rect)
         for entity in visible_entities:
             contact = first(lambda x: x.entity is entity, self.player.contacts)
             x, y = entity.xy_tuple
-            if x >= 0 and y >= 0 and x < self.tilemap.wh_tuple[0] and y < self.tilemap.wh_tuple[1]:
+            if on_screen((x, y)):
                 rect = ((x - topleft[0]) * cell_size, (y - topleft[1]) * cell_size, cell_size, cell_size) 
                 img = entity.get_drawn(self.zoomed_out)
                 self.screen.blit(img, rect)
@@ -2827,9 +3012,17 @@ class TacticalScene(Scene):
                            rect[1] + cell_size // 2 - acc_txt.get_height() // 2)
                     self.screen.blit(acc_txt, pos)
         for explosion in self.explosions:
-            x, y = (explosion.xy_tuple[0] - topleft[0]) * cell_size, (explosion.xy_tuple[1] - topleft[1]) * cell_size
-            img = explosion.get_drawn(self.zoomed_out)
-            self.screen.blit(img, (x, y))
+            if on_screen(explosion.xy_tuple):
+                x, y = (explosion.xy_tuple[0] - topleft[0]) * cell_size, (explosion.xy_tuple[1] - topleft[1]) * cell_size
+                img = explosion.get_drawn(zoomed_out=self.zoomed_out)
+                self.screen.blit(img, (x, y))
+        for weapon in self.animating_weapons:
+            if on_screen((weapon.animation_vector[0] // cell_size, weapon.animation_vector[1] // cell_size)) \
+                and weapon.known: 
+                img = weapon.get_drawn(zoomed_out=self.zoomed_out)
+                pos = (weapon.animation_vector[0] - topleft[0] * cell_size, \
+                    weapon.animation_vector[1] - topleft[1] * cell_size)
+                self.screen.blit(img, pos)
 
     def incoming_torp_alert(self):
         incoming = 0
@@ -2839,6 +3032,7 @@ class TacticalScene(Scene):
                 incoming += 1
                 torp.gui_alert = True
                 etas.append(torp.eta)
+                self.alerts.append(HudAlert(self.game.alerts["incoming"]))
         if incoming > 0:
             self.push_to_console("{} NEW INCOMING TORPEDOS(s)!".format(incoming), tag="combat")
         for eta in etas:

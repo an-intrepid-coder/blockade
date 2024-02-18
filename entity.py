@@ -10,6 +10,13 @@ from euclidean import manhattan_distance
 import sort_keys
 from unit_tile import *
 from sheets import *
+from random import randint
+
+wake_causing_entities = [
+    "small convoy escort",
+    "freighter",
+    "heavy convoy escort",
+]
 
 class Contact: 
     def __init__(self, entity, acc):
@@ -26,14 +33,74 @@ class Contact:
     def copy(self):
         return Contact(self.entity, self.acc)
 
+class HudAlert:
+    def __init__(self, surf):
+        self.surf = surf
+        self.offset = 32
+        self.max_offset = 60  
+        self.complete = False
+
+    def update(self):
+        self.offset += 1
+        if self.offset > self.max_offset:
+            self.complete = True
+
 class LaunchedWeapon:
-    def __init__(self, eta, launcher, target, wep_range, known=False):
+    def __init__(self, eta, launcher, target, wep_range, sheet, cell_size, known=False):
         self.eta = eta
+        self.sheet = sheet
         self.launcher = launcher
         self.target = target
         self.range = wep_range
         self.gui_alert = False
         self.known = known
+        self.animation_vector = pygame.math.Vector2(((launcher.xy_tuple[0] * cell_size) + 5, \
+            (launcher.xy_tuple[1] * cell_size) + 5))
+        self.animation_complete = False 
+        self.frame_index = 0
+        self.num_frames = 4
+        self.update_count = 0
+
+    def get_drawn(self, zoomed_out=False):
+        if zoomed_out:
+            img = self.sheet["zoomed out"]["left"][self.frame_index]
+        else:
+            img = self.sheet["regular"]["left"][self.frame_index]
+        self.frame_index = (self.frame_index + 1) % self.num_frames
+        return img
+
+class Torpedo(LaunchedWeapon):
+    def __init__(self, eta, launcher, target, wep_range, sheet, cell_size, known=False):
+        super().__init__(eta, launcher, target, wep_range, sheet, cell_size, known=known)
+        self.speed = 1
+        self.launch_updates = 100
+
+class Missile(LaunchedWeapon):
+    def __init__(self, eta, launcher, target, wep_range, sheet, cell_size, known=False):
+        super().__init__(eta, launcher, target, wep_range, sheet, cell_size, known=known)
+        self.speed = 2
+        self.launch_updates = 40
+
+class Wake:
+    def __init__(self, xy_tuple, entity, eta, orientation, sheet):
+        self.xy_tuple = xy_tuple
+        self.sheet = sheet
+        self.orientation = orientation
+        self.frame_count = 0
+        self.frame_index = 0
+        self.num_frames = 4
+        self.eta = eta
+        self.entity = entity
+
+    def get_drawn(self, zoomed_out=False):
+        if zoomed_out:
+            img = self.sheet["zoomed out"][self.orientation][self.frame_index]
+        else:
+            img = self.sheet["regular"][self.orientation][self.frame_index]
+        if self.frame_count == 0:
+            self.frame_index = (self.frame_index + 1) % self.num_frames
+        self.frame_count = (self.frame_count + 1) % ENTITY_FRAME_INDEX_INCREMENT_FREQ
+        return img
 
 class Explosion:
     def __init__(self, xy_tuple, sheet):
@@ -161,6 +228,26 @@ class AlliedFleet(CampaignEntity):
         self.can_ocean_move = True
         self.hp = 30
         self.speed = 30
+        self.engaged = False
+
+    def set_engaged(self, tu=None):
+        self.engaged = True
+
+class EnemyFleet(CampaignEntity):
+    def __init__(self, xy_tuple, sheet):
+        super().__init__(xy_tuple, "enemy", sheet)
+        self.name = "enemy fleet"
+        self.can_ocean_move = True
+        self.hp = 30
+        self.speed = 30
+        self.engaged = False
+        self.engagement_eta = None
+
+    def set_engaged(self, tu=None):
+        self.engaged = True
+        if tu is not None and self.engagement_eta is None:
+            lo, hi = FLEET_ENGAGEMENT_ETA_RANGE
+            self.engagement_eta = tu + randint(lo, hi)
 
 class TacticalEntity(Entity): 
     def __init__(self, xy_tuple, faction, sheet, unid_sheet, direction=None, formation=None): 

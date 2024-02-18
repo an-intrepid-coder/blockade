@@ -57,6 +57,8 @@ class Tile:
         self.danger_points = 0
         self.city_index = None
         self.front_line_index = 0
+        self.crater_index = None
+        self.crater_eta = 0
 
     def reduce_danger_points(self):
         if self.danger_points > 0:

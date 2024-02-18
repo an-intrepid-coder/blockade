@@ -35,6 +35,7 @@ class MiniMap:
             center = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
             color = faction_to_color[self.tilemap.tiles[x][y].faction]
             pygame.draw.circle(surf, color, center, 5)
+            pygame.draw.circle(surf, "black", center, 1)
             pygame.draw.circle(surf, "black", center, 5, 2)
         return surf
 
@@ -52,7 +53,7 @@ class MiniMap:
                     MM_CELL_SIZE) 
                 center = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
                 color = faction_to_color[entity.faction]
-                pygame.draw.circle(surf, color, center, 3)
+                pygame.draw.circle(surf, color, center, 1)
         scaled = pygame.transform.scale(surf, MINI_MAP_SIZE)
         pygame.draw.rect(scaled, "green", (0, 0, MINI_MAP_SIZE[0], MINI_MAP_SIZE[1]), 1)
         return scaled
