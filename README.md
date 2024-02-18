@@ -1,10 +1,7 @@
 # BLOCKADE 
 
-[![Early Prototype](screenshots/001_1t.jpg)](screenshots/001_1.jpg)
-[![Early Prototype](screenshots/001_2t.jpg)](screenshots/001_2.jpg)
-[![Early Prototype](screenshots/001_3t.jpg)](screenshots/001_3.jpg)
-[![Early Prototype](screenshots/001_4t.jpg)](screenshots/001_4.jpg)
-[![Early Prototype](screenshots/001_5t.jpg)](screenshots/001_5.jpg)
+[![Early Prototype](screenshots/002_1t.jpg)](screenshots/002_1.jpg)
+[![Early Prototype](screenshots/002_2t.jpg)](screenshots/002_2.jpg)
 
 **Status / Progress**: Currently the campaign is playable in its entirety, although a great many features have yet to be implemented. Most recently, I have transitioned the game from turn-based to real-time-pausable. Time compression and perhaps mouse and gamepad controls will be incoming in the near future to make the most of the advantages gained by this. The current game, although it can be played all the way through, should be considered a "skeleton" upon which many, many features remain to be implemented. Most players will see most of what the game has to offer within the first island invasion or two, at present.
 
